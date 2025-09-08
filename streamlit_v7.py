@@ -254,9 +254,38 @@ if uploaded_skim_file and uploaded_zones_file:
         # Initialize results
         results = pd.DataFrame({'OrigZoneNo': sorted(set(skim_df['OrigZoneNo']))})
 
+        # Utility: enforce unique columns & report duplicates
+        def enforce_unique_cols(df: pd.DataFrame, label: str = "DF") -> pd.DataFrame:
+            cols = list(map(str, df.columns))
+            seen = {}
+            new_cols = []
+            dups = []
+            for c in cols:
+                if c in seen:
+                    dups.append(c)
+                    k = seen[c]
+                    new_c = f"{c}__{k}"
+                    while new_c in seen:
+                        k += 1
+                        new_c = f"{c}__{k}"
+                    new_cols.append(new_c)
+                    seen[c] = k + 1
+                    seen[new_c] = 1
+                else:
+                    new_cols.append(c)
+                    seen[c] = 1
+            if dups:
+                st.warning(f"Duplicate columns resolved in {label}: {sorted(set(dups))}")
+            df = df.copy()
+            df.columns = new_cols
+            return df
+
+        results = enforce_unique_cols(results, label="results:init")
+
         # Merge with zone names
         zone_names = zones_df[['id', 'name']].rename(columns={'id': 'OrigZoneNo', 'name': 'ZoneName'})
         results = results.merge(zone_names, on='OrigZoneNo', how='left')
+        results = enforce_unique_cols(results, label="results:after zone names")
 
         # Helpers
         def best_row_by_metric(group_df: pd.DataFrame, metric: str):
@@ -292,6 +321,7 @@ if uploaded_skim_file and uploaded_zones_file:
 
             nearest_df = pd.DataFrame(nearest_rows)
             results = results.merge(nearest_df, on='OrigZoneNo', how='left')
+            results = enforce_unique_cols(results, label="results:after nearest")
 
             # Summary stats per metric
             cols = st.columns(4)
@@ -346,6 +376,7 @@ if uploaded_skim_file and uploaded_zones_file:
             if mapping_rows:
                 mapping_df = pd.DataFrame(mapping_rows)
                 results = results.merge(mapping_df, on='OrigZoneNo', how='left')
+                results = enforce_unique_cols(results, label="results:after mapping")
 
             colA, colB = st.columns(2)
             with colA:
@@ -452,6 +483,7 @@ if uploaded_skim_file and uploaded_zones_file:
             if fallback_rows:
                 fallback_df = pd.DataFrame(fallback_rows)
                 results = results.merge(fallback_df, on='OrigZoneNo', how='left')
+                results = enforce_unique_cols(results, label="results:after fallback")
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -491,6 +523,7 @@ if uploaded_skim_file and uploaded_zones_file:
                 if 'OrigZoneNo' in pop_df.columns and 'Population' in pop_df.columns:
                     pop_df = pop_df[['OrigZoneNo', 'Population']]
                     results = results.merge(pop_df, on='OrigZoneNo', how='left')
+                    results = enforce_unique_cols(results, label="results:after population")
                     results['Population'] = results['Population'].fillna(0).astype(int)
                     st.success(f"✅ Population data added for {len(pop_df)} zones")
                 else:
@@ -501,6 +534,23 @@ if uploaded_skim_file and uploaded_zones_file:
         # =====================
         # Display results
         # =====================
+        # Ensure unique, stringified column names to avoid Arrow duplicate-name error
+        def _make_unique(cols):
+            seen = {}
+            out = []
+            for c in map(str, cols):
+                if c not in seen:
+                    seen[c] = 1
+                    out.append(c)
+                else:
+                    k = seen[c]
+                    out.append(f"{c}__{k}")
+                    seen[c] = k + 1
+            return out
+
+        results = results.copy()
+        results.columns = _make_unique(results.columns)
+
         st.subheader("🎯 Accessibility Results (All Metrics)")
 
         display_columns = ['OrigZoneNo', 'ZoneName']
@@ -513,7 +563,8 @@ if uploaded_skim_file and uploaded_zones_file:
         method_cols = [c for c in results.columns if c.endswith("_Used") or c == 'Method_Used']
 
         display_columns.extend(metric_value_cols + zone_cols + method_cols)
-        display_columns = [c for c in display_columns if c in results.columns]
+        # Drop duplicates from the display list while preserving order
+        display_columns = [c for i, c in enumerate(display_columns) if c in results.columns and c not in display_columns[:i]]
 
         st.dataframe(results[display_columns], use_container_width=True)
 
@@ -588,6 +639,7 @@ if uploaded_skim_file and uploaded_zones_file:
 
             if summary_rows:
                 summary_df = pd.DataFrame(summary_rows)
+                summary_df = enforce_unique_cols(summary_df, label="summary")
                 st.dataframe(summary_df, use_container_width=True)
 
                 csv_summary = summary_df.to_csv(index=False)
