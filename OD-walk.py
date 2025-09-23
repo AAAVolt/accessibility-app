@@ -236,17 +236,13 @@ def calculate_accessibility_with_times(walking_distance_file, od_data_file, acce
                 'Origin_ZoneName': acc_row.get('ZoneName', ''),
                 'Origin_Population': acc_row.get('Population', np.nan),
                 'Destination': destination_zone,
-                'Journey_Type': journey_type,
                 'Uses_Public_Transport': uses_public_transport,
                 'FromStopPointNo': from_stop,
                 'ToStopPointNo': to_stop,
                 'Access_Time_Minutes': access_time_minutes,
-                'Travel_Time_Minutes': travel_time,
                 'Egress_Time_Minutes': egress_time_minutes,
-                'Total_Time_Minutes': total_time,
                 'Access_Distance_Meters': access_distance,
-                'Egress_Distance_Meters': egress_distance,
-                'PathIndex': od_row.get('PathIndex', np.nan)
+                'Egress_Distance_Meters': egress_distance
             }
 
             # Add accessibility scores to the result
@@ -260,15 +256,17 @@ def calculate_accessibility_with_times(walking_distance_file, od_data_file, acce
     print(f"Found {matches_found} matching origin-destination pairs in OD routing data")
 
     if results:
-        # Count journey types
-        journey_types = {}
+        # Count transport types
+        transport_types = {'Public Transport': 0, 'Walking Only': 0}
         for result in results:
-            jtype = result['Journey_Type']
-            journey_types[jtype] = journey_types.get(jtype, 0) + 1
+            if result['Uses_Public_Transport']:
+                transport_types['Public Transport'] += 1
+            else:
+                transport_types['Walking Only'] += 1
 
-        print(f"Journey types found:")
-        for jtype, count in journey_types.items():
-            print(f"  {jtype}: {count} journeys")
+        print(f"Transport types found:")
+        for ttype, count in transport_types.items():
+            print(f"  {ttype}: {count} journeys")
 
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
@@ -295,17 +293,11 @@ def analyze_accessibility_coverage(results_df, destination_type='all'):
     print(f"Total origin-destination pairs: {len(results_df)}")
 
     # Time statistics (only for valid journeys)
-    valid_journeys = results_df.dropna(subset=['Total_Time_Minutes'])
+    valid_journeys = results_df.dropna(subset=['Access_Time_Minutes', 'Egress_Time_Minutes'])
     if not valid_journeys.empty:
         print(f"\nJourney Time Statistics (valid journeys: {len(valid_journeys)}):")
         print(f"Average access time: {valid_journeys['Access_Time_Minutes'].mean():.2f} minutes")
-        print(f"Average travel time: {valid_journeys['Travel_Time_Minutes'].mean():.2f} minutes")
         print(f"Average egress time: {valid_journeys['Egress_Time_Minutes'].mean():.2f} minutes")
-        print(f"Average total time: {valid_journeys['Total_Time_Minutes'].mean():.2f} minutes")
-
-        print(f"\nTime Ranges:")
-        print(
-            f"Total time range: {valid_journeys['Total_Time_Minutes'].min():.2f} - {valid_journeys['Total_Time_Minutes'].max():.2f} minutes")
 
     # Missing data analysis
     missing_access = results_df['Access_Time_Minutes'].isna().sum()
@@ -342,10 +334,9 @@ if __name__ == "__main__":
         # Analyze results
         valid_journeys = analyze_accessibility_coverage(results)
 
-        # Show sample of results
+        # Show sample of results - MODIFIED to exclude specified columns
         print(f"\nSample results (first 5 rows):")
-        sample_cols = ['Origin', 'Destination', 'Access_Time_Minutes', 'Travel_Time_Minutes',
-                       'Egress_Time_Minutes', 'Total_Time_Minutes']
+        sample_cols = ['Origin', 'Destination', 'Access_Time_Minutes', 'Egress_Time_Minutes']
         print(results[sample_cols].head().to_string(index=False))
 
         # Save results
@@ -355,22 +346,22 @@ if __name__ == "__main__":
         if 'Mapeada_JRT' in results.columns:
             print(f"\nAccessibility correlation analysis:")
             corr_data = results.groupby('Origin').agg({
-                'Total_Time_Minutes': 'mean',
+                'Access_Time_Minutes': 'mean',
                 'Mapeada_JRT': 'first',  # Accessibility scores are same for all destinations from same origin
                 'Mapeada_NTR': 'first',
                 'Origin_Population': 'first'
             }).dropna()
 
             if len(corr_data) > 1:
-                correlation = corr_data['Total_Time_Minutes'].corr(corr_data['Mapeada_JRT'])
-                print(f"Correlation between average total time and JRT accessibility: {correlation:.3f}")
+                correlation = corr_data['Access_Time_Minutes'].corr(corr_data['Mapeada_JRT'])
+                print(f"Correlation between average access time and JRT accessibility: {correlation:.3f}")
 
         # Summary by destination zones (most/least accessible)
         dest_summary = results.groupby('Destination').agg({
-            'Total_Time_Minutes': ['count', 'mean', 'std'],
+            'Access_Time_Minutes': ['count', 'mean', 'std'],
             'Origin': 'nunique'
         }).round(2)
-        dest_summary.columns = ['Journey_Count', 'Avg_Time', 'Std_Time', 'Connected_Origins']
+        dest_summary.columns = ['Journey_Count', 'Avg_Access_Time', 'Std_Access_Time', 'Connected_Origins']
 
         print(f"\nTop 10 most connected destinations:")
         top_destinations = dest_summary.nlargest(10, 'Connected_Origins')
