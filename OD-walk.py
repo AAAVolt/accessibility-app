@@ -114,9 +114,9 @@ def save_results(results_df, output_file='accessibility_with_times.csv'):
 # Example usage
 if __name__ == "__main__":
     # Replace these with your actual file paths
-    walking_distance_file = "walking_distances.csv"
-    od_data_file = "od_routing.csv"
-    accessibility_file = r"C:\Users\avoltan\Downloads\Hospital_Accessibility.csv"
+    walking_distance_file = r"C:\Users\avoltan\Desktop\OD_walk_data\OD_v3.csv"
+    od_data_file = r"C:\Users\avoltan\Desktop\OD_walk_data\min_time_trips_per_od_optimized_v3.csv"
+    accessibility_file = r"C:\Users\avoltan\Desktop\OD_walk_data\Hospital_Accessibility.csv"
 
     # Calculate accessibility with times
     results = calculate_accessibility_with_times(
