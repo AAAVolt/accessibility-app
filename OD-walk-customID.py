@@ -312,7 +312,7 @@ def analyze_accessibility_coverage(results_df, destination_type='all'):
     return valid_journeys
 
 
-def save_results(results_df, output_file='accessibility_with_times_cruces.csv'):
+def save_results(results_df, output_file='accessibility_with_times_quiron.csv'):
     """Save results to CSV file"""
     results_df.to_csv(output_file, index=False)
     print(f"\nResults saved to {output_file}")
@@ -322,8 +322,8 @@ def save_results(results_df, output_file='accessibility_with_times_cruces.csv'):
 if __name__ == "__main__":
     # Replace these with your actual file paths
     walking_distance_file = r"C:\Users\avoltan\Desktop\OD_walk_data\OD_v4.csv"
-    od_data_file = r"C:\Users\avoltan\Desktop\OD_walk_data\min_time_trips_per_od_optimized_v3.csv"
-    accessibility_file = r"C:\Users\avoltan\Desktop\OD_walk_data\cruces_accessibility.csv"
+    od_data_file = r"C:\Users\avoltan\Desktop\OD_walk_data\min_time_trips_per_od_optimized_quiron.csv"
+    accessibility_file = r"C:\Users\avoltan\Desktop\OD_walk_data\quiron_accessibility.csv"
 
     # Calculate accessibility with times
     results = calculate_accessibility_with_times(
@@ -344,7 +344,7 @@ if __name__ == "__main__":
         print(results[available_cols].head().to_string(index=False))
 
         # Save results
-        save_results(results, 'accessibility_with_times_cruces.csv')
+        save_results(results, 'accessibility_with_times_quiron.csv')
 
         # Create summary by origin zones with accessibility scores
         if 'Mejor_JRT' in results.columns:
