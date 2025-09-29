@@ -9,9 +9,61 @@ st.set_page_config(page_title="Bizkaia Accessibility Analysis", layout="wide", p
 # Title and introduction
 st.title("🚌 Bizkaia Public Transport Accessibility Analysis")
 st.markdown("""
-**Comprehensive analysis of Bizkaibus service accessibility across zones and Points of Interest (POI)**  
-*Evaluating door-to-door travel times, service coverage, and population access*
+**Policy-focused analysis of Bizkaibus service accessibility**  
+*Identifying priority areas for service improvement based on population and travel time*
 """)
+
+# Methodology expander
+with st.expander("📋 Methodology & Data Structure", expanded=False):
+    st.markdown("""
+    ### Data Columns Used in Analysis:
+
+    **Origin Information:**
+    - `Zona_Origen` → Origin zone ID (unique identifier for each neighborhood/area)
+    - `Zona_Origen_nombre` → Human-readable name of the origin zone/neighborhood
+    - `Poblacion_Origen` → **Population living in the origin zone** (number of residents - used for weighting accessibility metrics)
+
+    **Destination Information:**
+    - `Zona_Destino_nombre` → Point of Interest (POI) destination name
+    - `Zona_Destino` → Destination zone ID
+
+    **Travel Time Metrics:**
+    - `Tiempo_Viaje_Total_Minutos` → **Total door-to-door travel time** (main metric for accessibility)
+    - `Tiempo_Trayecto_Minutos` → In-vehicle time only
+    - `Tiempo_Acceso_Minutos` → Walking time from origin to bus stop
+    - `Tiempo_Salida_Minutos` → Walking time from bus stop to destination
+    - `Tiempo_Espera_Transbordo_Minutos` → Waiting time for transfers
+
+    **Distance Metrics:**
+    - `Distancia_Viaje_Total_Km` → Total trip distance (walking + vehicle)
+    - `Distancia_Trayecto_Km` → In-vehicle distance
+
+    **Service Quality:**
+    - `Numero_Transbordos` → Number of transfers required
+    - `Usa_Transporte_Publico` → Whether public transport is used (True/False)
+    - `Frecuencia_Servicio` → Service headway (minutes between buses)
+
+    ### Accessibility Categories:
+    We classify connections into 4 categories based on **total travel time**:
+    - 🟢 **Excellent**: < 30 minutes
+    - 🟡 **Good**: 30-45 minutes
+    - 🟠 **Fair**: 45-60 minutes
+    - 🔴 **Poor**: > 60 minutes
+
+    ### Key Calculations:
+
+    1. **Population-weighted accessibility**: We multiply each origin zone's accessibility metrics by its population (`Poblacion_Origen`) to understand how many actual residents have good vs poor connections. This gives us the true impact on people, not just geographic coverage.
+
+    2. **Distance efficiency**: We calculate average travel time per kilometer (Tiempo_Viaje_Total_Minutos / Distancia_Viaje_Total_Km) to identify where service is inefficient despite short distances.
+
+    3. **POI accessibility score**: For each POI, we calculate the average travel time from all origin zones, weighted by the population of each zone. This shows which destinations are accessible to the most people.
+
+    ### Important Notes:
+    - Each row represents one possible origin-destination pair
+    - **`Poblacion_Origen`** contains the actual population count for each origin zone
+    - All percentages are **population-weighted** to reflect impact on actual residents
+    - When we say "X% of population has good access", we mean X% of the total population across all origin zones
+    """)
 
 # File uploader
 uploaded_file = st.file_uploader("Upload your Excel file", type=['xlsx', 'xls'])
@@ -23,36 +75,38 @@ if uploaded_file is not None:
     # Data cleaning
     df.columns = df.columns.str.strip()
 
-    # Store original dataframe for calculations
-    df_original = df.copy()
-
     # Sidebar filters
     st.sidebar.header("🔍 Filters")
 
     # Filter by public transport usage
     transport_filter = st.sidebar.radio(
         "Transport Mode",
-        ["All trips", "Public transport only", "Without public transport"],
-        index=1
+        ["Public transport only", "All trips"],
+        index=0
     )
 
     if transport_filter == "Public transport only":
         df_filtered = df[df['Usa_Transporte_Publico'] == True].copy()
-    elif transport_filter == "Without public transport":
-        df_filtered = df[df['Usa_Transporte_Publico'] == False].copy()
     else:
         df_filtered = df.copy()
 
-    # Filter by origin municipality - FIXED to show actual unique values
-    unique_municipalities = sorted(df_filtered['Poblacion_Origen'].dropna().unique().tolist())
+    # Filter by origin municipality
+    unique_municipalities = sorted(
+        df_filtered['Zona_Origen_nombre'].str.extract(r'\((.*?)\)')[0].dropna().unique().tolist())
     municipalities = ['All'] + unique_municipalities
-    selected_municipality = st.sidebar.selectbox("Origin Municipality", municipalities)
+    selected_municipality = st.sidebar.selectbox("Filter by Municipality", municipalities)
 
     if selected_municipality != 'All':
-        df_filtered = df_filtered[df_filtered['Poblacion_Origen'] == selected_municipality]
+        df_filtered = df_filtered[df_filtered['Zona_Origen_nombre'].str.contains(selected_municipality, na=False)]
 
-    # Main metrics
-    st.header("📊 Key Performance Indicators")
+    # Calculate total population for weighting
+    total_population = df_filtered.groupby('Zona_Origen')['Poblacion_Origen'].first().sum()
+
+    st.sidebar.markdown(f"**Analyzing {len(df_filtered):,} origin-destination pairs**")
+    st.sidebar.markdown(f"**Total population covered: {total_population:,.0f} residents**")
+
+    # Main KPIs
+    st.header("📊 Key Metrics")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -65,525 +119,563 @@ if uploaded_file is not None:
         st.metric("Avg Transfers", f"{avg_transfers:.2f}")
 
     with col3:
-        pt_usage = (df['Usa_Transporte_Publico'].sum() / len(df) * 100)
-        st.metric("PT Usage Rate", f"{pt_usage:.1f}%")
+        # Calculate population-weighted percentage under 30 min
+        df_under_30 = df_filtered[df_filtered['Tiempo_Viaje_Total_Minutos'] <= 30].groupby('Zona_Origen')[
+            'Poblacion_Origen'].first().sum()
+        under_30_pct = (df_under_30 / total_population * 100) if total_population > 0 else 0
+        st.metric("Population < 30min", f"{under_30_pct:.1f}%")
 
     with col4:
         total_zones = df_filtered['Zona_Origen'].nunique()
-        st.metric("Total Origin Zones", f"{total_zones}")
+        st.metric("Origin Zones", f"{total_zones}")
 
-    # Create tabs for different analyses
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "🗺️ Zone Accessibility",
+    # Create tabs for policy-focused analyses
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🎯 Accessibility Overview",
         "📍 POI Analysis",
-        "⏱️ Travel Time Analysis",
-        "🔄 Transfer Analysis",
-        "👥 Population Coverage",
-        "📈 Service Quality"
+        "⚠️ Priority Areas",
+        "📊 Distance Efficiency"
     ])
 
-    # TAB 1: Zone Accessibility
+    # TAB 1: Accessibility Overview
     with tab1:
-        st.subheader("Zone Accessibility Rankings")
+        st.subheader("Population Accessibility Distribution")
+        st.markdown("*What percentage of the population has good vs poor connections to POIs?*")
 
-        col1, col2 = st.columns(2)
+        # Accessibility categories
+        df_filtered['Accessibility_Category'] = pd.cut(
+            df_filtered['Tiempo_Viaje_Total_Minutos'],
+            bins=[0, 30, 45, 60, float('inf')],
+            labels=['🟢 Excellent (<30min)', '🟡 Good (30-45min)',
+                    '🟠 Fair (45-60min)', '🔴 Poor (>60min)']
+        )
+
+        # Calculate POPULATION-WEIGHTED percentages
+        pop_by_category = {}
+        for category in ['🟢 Excellent (<30min)', '🟡 Good (30-45min)', '🟠 Fair (45-60min)', '🔴 Poor (>60min)']:
+            category_data = df_filtered[df_filtered['Accessibility_Category'] == category]
+            # Get unique zones in this category and sum their populations
+            pop_in_category = category_data.groupby('Zona_Origen')['Poblacion_Origen'].first().sum()
+            pop_by_category[category] = pop_in_category
+
+        category_pcts = {k: (v / total_population * 100) if total_population > 0 else 0
+                         for k, v in pop_by_category.items()}
+
+        col1, col2 = st.columns([2, 1])
 
         with col1:
-            # Best connected zones (lowest average travel time)
-            zone_stats = df_filtered.groupby('Zona_Origen_nombre').agg({
-                'Tiempo_Viaje_Total_Minutos': 'mean',
-                'Numero_Transbordos': 'mean',
-                'Poblacion_Origen': 'first'
-            }).reset_index()
-            zone_stats = zone_stats.sort_values('Tiempo_Viaje_Total_Minutos')
+            # Bar chart with population-weighted percentages
+            categories = list(pop_by_category.keys())
+            populations = list(pop_by_category.values())
+            percentages = [category_pcts[cat] for cat in categories]
 
-            st.markdown("**🟢 Top 10 Best Connected Zones**")
-            best_zones = zone_stats.head(10)
-            fig1 = px.bar(best_zones,
-                          x='Tiempo_Viaje_Total_Minutos',
-                          y='Zona_Origen_nombre',
-                          orientation='h',
-                          color='Numero_Transbordos',
-                          color_continuous_scale='Greens_r',
-                          labels={'Tiempo_Viaje_Total_Minutos': 'Avg Travel Time (min)',
-                                  'Zona_Origen_nombre': 'Origin Zone',
-                                  'Numero_Transbordos': 'Avg Transfers'})
-            fig1.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            fig1 = px.bar(
+                x=categories,
+                y=populations,
+                color=categories,
+                color_discrete_map={
+                    '🟢 Excellent (<30min)': '#2ecc71',
+                    '🟡 Good (30-45min)': '#f1c40f',
+                    '🟠 Fair (45-60min)': '#e67e22',
+                    '🔴 Poor (>60min)': '#e74c3c'
+                },
+                text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)]
+            )
+            fig1.update_layout(
+                title="Distribution of Population by Accessibility",
+                xaxis_title="Accessibility Category",
+                yaxis_title="Population (residents)",
+                showlegend=False,
+                height=400
+            )
+            fig1.update_traces(textposition='outside')
             st.plotly_chart(fig1, use_container_width=True)
 
         with col2:
-            # Worst connected zones (highest average travel time)
-            st.markdown("**🔴 Top 10 Least Connected Zones**")
-            worst_zones = zone_stats.tail(10)
-            fig2 = px.bar(worst_zones,
-                          x='Tiempo_Viaje_Total_Minutos',
-                          y='Zona_Origen_nombre',
-                          orientation='h',
-                          color='Numero_Transbordos',
-                          color_continuous_scale='Reds',
-                          labels={'Tiempo_Viaje_Total_Minutos': 'Avg Travel Time (min)',
-                                  'Zona_Origen_nombre': 'Origin Zone',
-                                  'Numero_Transbordos': 'Avg Transfers'})
-            fig2.update_layout(height=400, yaxis={'categoryorder': 'total descending'})
-            st.plotly_chart(fig2, use_container_width=True)
+            st.markdown("### Summary")
+            for cat in categories:
+                pct = category_pcts[cat]
+                pop = pop_by_category[cat]
+                if '🟢' in cat or '🟡' in cat:
+                    st.success(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+                elif '🟠' in cat:
+                    st.warning(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+                else:
+                    st.error(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+
+        # Travel time distribution histogram
+        st.markdown("---")
+        st.markdown("### Travel Time Distribution")
+        fig2 = px.histogram(
+            df_filtered,
+            x='Tiempo_Viaje_Total_Minutos',
+            nbins=40,
+            histnorm='percent',
+            color_discrete_sequence=['#3498db']
+        )
+        fig2.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="30 min")
+        fig2.add_vline(x=45, line_dash="dash", line_color="orange", annotation_text="45 min")
+        fig2.add_vline(x=60, line_dash="dash", line_color="red", annotation_text="60 min")
+        fig2.update_layout(
+            xaxis_title="Total Travel Time (minutes)",
+            yaxis_title="Percentage of Connections (%)",
+            height=400
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
         # Municipality comparison
-        st.markdown("**📊 Municipality Accessibility Comparison**")
-        muni_stats = df_filtered.groupby('Poblacion_Origen').agg({
-            'Tiempo_Viaje_Total_Minutos': 'mean',
-            'Numero_Transbordos': 'mean',
-            'Zona_Origen': 'nunique'
-        }).reset_index()
-        muni_stats.columns = ['Municipality', 'Avg Travel Time (min)', 'Avg Transfers', 'Number of Zones']
+        st.markdown("---")
+        st.markdown("### Accessibility by Zone")
+        st.markdown("*Average travel time and percentage of good connections by origin zone (sized by population)*")
 
-        fig3 = px.scatter(muni_stats,
-                          x='Avg Travel Time (min)',
-                          y='Avg Transfers',
-                          size='Number of Zones',
-                          text='Municipality',
-                          color='Avg Travel Time (min)',
-                          color_continuous_scale='RdYlGn_r')
-        fig3.update_traces(textposition='top center')
-        fig3.update_layout(height=500)
+        # Calculate zone-level statistics with population
+        zone_stats = df_filtered.groupby('Zona_Origen_nombre').agg({
+            'Tiempo_Viaje_Total_Minutos': 'mean',
+            'Zona_Origen': 'first',
+            'Poblacion_Origen': 'first'
+        }).reset_index()
+
+        # Calculate % of good connections per zone
+        good_connections_per_zone = df_filtered[df_filtered['Tiempo_Viaje_Total_Minutos'] <= 45].groupby(
+            'Zona_Origen_nombre').size()
+        total_connections_per_zone = df_filtered.groupby('Zona_Origen_nombre').size()
+        zone_stats['Good_Connection_Pct'] = (good_connections_per_zone / total_connections_per_zone * 100).reindex(
+            zone_stats['Zona_Origen_nombre'], fill_value=0).values
+
+        zone_stats.columns = ['Zone', 'Avg Travel Time (min)', 'Zone_ID', 'Population', 'Good Connections (%)']
+        zone_stats = zone_stats.sort_values('Avg Travel Time (min)')
+
+        fig3 = px.scatter(
+            zone_stats,
+            x='Avg Travel Time (min)',
+            y='Good Connections (%)',
+            size='Population',
+            text='Zone',
+            color='Avg Travel Time (min)',
+            color_continuous_scale='RdYlGn_r',
+            size_max=60,
+            hover_data={'Population': ':,.0f'}
+        )
+        fig3.update_traces(textposition='top center', textfont_size=8)
+        fig3.update_layout(
+            title="Zone Performance: Travel Time vs Quality (bubble size = population)",
+            height=500,
+            xaxis_title="Average Travel Time (minutes)",
+            yaxis_title="% of Connections < 45 min"
+        )
         st.plotly_chart(fig3, use_container_width=True)
 
     # TAB 2: POI Analysis
     with tab2:
         st.subheader("Point of Interest (POI) Accessibility")
+        st.markdown("*Which destinations are well-connected and which need improvement?*")
 
-        # POI accessibility ranking
-        poi_stats = df_filtered.groupby('Zona_Destino_nombre').agg({
-            'Tiempo_Viaje_Total_Minutos': ['mean', 'std', 'min', 'max'],
-            'Numero_Transbordos': 'mean',
-            'Zona_Origen': 'count'
-        }).reset_index()
-        poi_stats.columns = ['POI', 'Avg Time', 'Std Time', 'Min Time', 'Max Time', 'Avg Transfers', 'Connections']
-        poi_stats = poi_stats.sort_values('Avg Time')
+        # POI statistics with POPULATION weighting
+        poi_accessibility = []
+        for poi in df_filtered['Zona_Destino_nombre'].unique():
+            poi_data = df_filtered[df_filtered['Zona_Destino_nombre'] == poi]
 
-        col1, col2 = st.columns([2, 1])
+            # Get unique zones and their populations
+            zone_pops = poi_data.groupby('Zona_Origen')['Poblacion_Origen'].first()
+            total_pop_poi = zone_pops.sum()
+
+            # Calculate population in each time category
+            excellent_zones = poi_data[poi_data['Tiempo_Viaje_Total_Minutos'] <= 30]['Zona_Origen'].unique()
+            good_zones = poi_data[(poi_data['Tiempo_Viaje_Total_Minutos'] > 30) &
+                                  (poi_data['Tiempo_Viaje_Total_Minutos'] <= 45)]['Zona_Origen'].unique()
+            poor_zones = poi_data[poi_data['Tiempo_Viaje_Total_Minutos'] > 60]['Zona_Origen'].unique()
+
+            pop_excellent = zone_pops[zone_pops.index.isin(excellent_zones)].sum()
+            pop_good = zone_pops[zone_pops.index.isin(good_zones)].sum()
+            pop_poor = zone_pops[zone_pops.index.isin(poor_zones)].sum()
+
+            # Calculate weighted average travel time
+            poi_data_unique = poi_data.groupby('Zona_Origen').agg({
+                'Tiempo_Viaje_Total_Minutos': 'mean',
+                'Poblacion_Origen': 'first'
+            })
+            weighted_avg_time = (poi_data_unique['Tiempo_Viaje_Total_Minutos'] * poi_data_unique[
+                'Poblacion_Origen']).sum() / total_pop_poi if total_pop_poi > 0 else 0
+
+            poi_accessibility.append({
+                'POI': poi,
+                'Avg Time': weighted_avg_time,
+                'Total Population': total_pop_poi,
+                'Excellent (%)': (pop_excellent / total_pop_poi * 100) if total_pop_poi > 0 else 0,
+                'Good (%)': (pop_good / total_pop_poi * 100) if total_pop_poi > 0 else 0,
+                'Poor (%)': (pop_poor / total_pop_poi * 100) if total_pop_poi > 0 else 0
+            })
+
+        poi_df = pd.DataFrame(poi_accessibility).sort_values('Avg Time')
+
+        # Top and bottom POIs
+        col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**POI Accessibility Ranking (by average travel time)**")
-            fig4 = px.bar(poi_stats,
-                          x='Avg Time',
-                          y='POI',
-                          orientation='h',
-                          color='Connections',
-                          color_continuous_scale='Blues',
-                          hover_data=['Avg Transfers', 'Min Time', 'Max Time'])
-            fig4.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
+            st.markdown("#### 🟢 Best Connected POIs")
+            best_pois = poi_df.head(5)
+            fig4 = px.bar(
+                best_pois,
+                x='Avg Time',
+                y='POI',
+                orientation='h',
+                color='Excellent (%)',
+                color_continuous_scale='Greens',
+                text='Avg Time'
+            )
+            fig4.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            fig4.update_layout(height=300, yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig4, use_container_width=True)
 
         with col2:
-            st.markdown("**POI Statistics**")
-            st.dataframe(poi_stats[['POI', 'Avg Time', 'Avg Transfers', 'Connections']]
-                         .sort_values('Avg Time')
-                         .style.format({'Avg Time': '{:.1f}', 'Avg Transfers': '{:.2f}'})
-                         .background_gradient(subset=['Avg Time'], cmap='RdYlGn_r'),
-                         height=600)
+            st.markdown("#### 🔴 Worst Connected POIs")
+            worst_pois = poi_df.tail(5)
+            fig5 = px.bar(
+                worst_pois,
+                x='Avg Time',
+                y='POI',
+                orientation='h',
+                color='Poor (%)',
+                color_continuous_scale='Reds',
+                text='Avg Time'
+            )
+            fig5.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            fig5.update_layout(height=300, yaxis={'categoryorder': 'total descending'})
+            st.plotly_chart(fig5, use_container_width=True)
 
-        # POI accessibility distribution
-        st.markdown("**📊 Travel Time Distribution by POI**")
-        fig5 = px.box(df_filtered,
-                      x='Zona_Destino_nombre',
-                      y='Tiempo_Viaje_Total_Minutos',
-                      color='Zona_Destino_nombre',
-                      labels={'Tiempo_Viaje_Total_Minutos': 'Travel Time (min)',
-                              'Zona_Destino_nombre': 'POI'})
-        fig5.update_layout(height=500, showlegend=False)
-        fig5.update_xaxes(tickangle=45)
-        st.plotly_chart(fig5, use_container_width=True)
+        # Detailed POI breakdown
+        st.markdown("---")
+        st.markdown("#### Accessibility Breakdown by POI")
+        st.markdown("*Percentage of **population** with excellent, good, or poor access to each POI*")
 
-    # TAB 3: Travel Time Analysis
-    with tab3:
-        st.subheader("Travel Time Components Analysis")
+        # Stacked bar chart
+        fig6 = go.Figure()
 
-        # Calculate time components percentages
-        df_filtered['Access_Pct'] = (
-                    df_filtered['Tiempo_Acceso_Minutos'] / df_filtered['Tiempo_Viaje_Total_Minutos'] * 100)
-        df_filtered['InVehicle_Pct'] = (
-                    df_filtered['Tiempo_Trayecto_Minutos'] / df_filtered['Tiempo_Viaje_Total_Minutos'] * 100)
-        df_filtered['Egress_Pct'] = (
-                    df_filtered['Tiempo_Salida_Minutos'] / df_filtered['Tiempo_Viaje_Total_Minutos'] * 100)
-        df_filtered['Wait_Pct'] = (
-                    df_filtered['Tiempo_Espera_Transbordo_Minutos'] / df_filtered['Tiempo_Viaje_Total_Minutos'] * 100)
+        poi_df_sorted = poi_df.sort_values('Avg Time')
 
-        col1, col2 = st.columns(2)
+        fig6.add_trace(go.Bar(
+            name='🟢 Excellent (<30min)',
+            y=poi_df_sorted['POI'],
+            x=poi_df_sorted['Excellent (%)'],
+            orientation='h',
+            marker_color='#2ecc71',
+            text=poi_df_sorted['Excellent (%)'].round(1),
+            textposition='inside'
+        ))
 
-        with col1:
-            # Average time components
-            avg_components = {
-                'Access (Walk to stop)': df_filtered['Tiempo_Acceso_Minutos'].mean(),
-                'In-Vehicle': df_filtered['Tiempo_Trayecto_Minutos'].mean(),
-                'Transfer Wait': df_filtered['Tiempo_Espera_Transbordo_Minutos'].mean(),
-                'Egress (Stop to destination)': df_filtered['Tiempo_Salida_Minutos'].mean()
-            }
+        fig6.add_trace(go.Bar(
+            name='🟡 Good (30-45min)',
+            y=poi_df_sorted['POI'],
+            x=poi_df_sorted['Good (%)'],
+            orientation='h',
+            marker_color='#f1c40f',
+            text=poi_df_sorted['Good (%)'].round(1),
+            textposition='inside'
+        ))
 
-            fig6 = go.Figure(data=[go.Pie(labels=list(avg_components.keys()),
-                                          values=list(avg_components.values()),
-                                          hole=.3)])
-            fig6.update_layout(title="Average Travel Time Breakdown", height=400)
-            st.plotly_chart(fig6, use_container_width=True)
+        fig6.add_trace(go.Bar(
+            name='🔴 Poor (>60min)',
+            y=poi_df_sorted['POI'],
+            x=poi_df_sorted['Poor (%)'],
+            orientation='h',
+            marker_color='#e74c3c',
+            text=poi_df_sorted['Poor (%)'].round(1),
+            textposition='inside'
+        ))
 
-        with col2:
-            # Travel time distribution with percentages - FIXED
-            st.markdown("**Travel Time Distribution**")
-            hist_data = df_filtered['Tiempo_Viaje_Total_Minutos'].dropna()
-            fig7 = px.histogram(df_filtered,
-                                x='Tiempo_Viaje_Total_Minutos',
-                                nbins=30,
-                                color_discrete_sequence=['#1f77b4'],
-                                histnorm='percent')
-            fig7.update_layout(xaxis_title="Total Travel Time (min)",
-                               yaxis_title="Percentage of Trips (%)",
-                               height=400)
-            st.plotly_chart(fig7, use_container_width=True)
-
-        # Travel time vs distance
-        st.markdown("**⚡ Travel Speed Analysis**")
-        df_filtered['Avg_Speed_Kmh'] = (df_filtered['Distancia_Viaje_Total_Km'] /
-                                        (df_filtered['Tiempo_Viaje_Total_Minutos'] / 60))
-
-        fig8 = px.scatter(df_filtered,
-                          x='Distancia_Viaje_Total_Km',
-                          y='Tiempo_Viaje_Total_Minutos',
-                          color='Numero_Transbordos',
-                          hover_data=['Zona_Origen_nombre', 'Zona_Destino_nombre', 'Avg_Speed_Kmh'],
-                          labels={'Distancia_Viaje_Total_Km': 'Distance (km)',
-                                  'Tiempo_Viaje_Total_Minutos': 'Travel Time (min)',
-                                  'Numero_Transbordos': 'Transfers'})
-        fig8.update_layout(height=500)
-        st.plotly_chart(fig8, use_container_width=True)
-
-        # Accessibility categories with percentages - FIXED
-        st.markdown("**🎯 Accessibility Categories**")
-        df_filtered['Accessibility_Category'] = pd.cut(df_filtered['Tiempo_Viaje_Total_Minutos'],
-                                                       bins=[0, 30, 45, 60, float('inf')],
-                                                       labels=['Excellent (<30min)', 'Good (30-45min)',
-                                                               'Fair (45-60min)', 'Poor (>60min)'])
-
-        category_counts = df_filtered['Accessibility_Category'].value_counts()
-        category_pcts = (category_counts / len(df_filtered) * 100).round(1)
-
-        # Create labels with both count and percentage
-        labels_with_pct = [f"{cat}<br>{count} trips ({category_pcts[cat]}%)"
-                           for cat, count in category_counts.items()]
-
-        fig9 = px.bar(x=category_counts.index,
-                      y=category_counts.values,
-                      color=category_counts.index,
-                      color_discrete_map={'Excellent (<30min)': 'green',
-                                          'Good (30-45min)': 'lightgreen',
-                                          'Fair (45-60min)': 'orange',
-                                          'Poor (>60min)': 'red'},
-                      text=[f"{count}<br>({category_pcts[cat]}%)" for cat, count in category_counts.items()])
-        fig9.update_layout(title="Distribution of Accessibility Categories",
-                           xaxis_title="Category",
-                           yaxis_title="Number of Connections",
-                           showlegend=False,
-                           height=400)
-        fig9.update_traces(textposition='outside')
-        st.plotly_chart(fig9, use_container_width=True)
-
-    # TAB 4: Transfer Analysis
-    with tab4:
-        st.subheader("Transfer and Service Quality Analysis")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            # Transfer distribution with percentages - FIXED
-            transfer_dist = df_filtered['Numero_Transbordos'].value_counts().sort_index()
-            transfer_pcts = (transfer_dist / len(df_filtered) * 100).round(1)
-
-            fig10 = px.bar(x=transfer_dist.index,
-                           y=transfer_dist.values,
-                           labels={'x': 'Number of Transfers', 'y': 'Number of Trips'},
-                           color=transfer_dist.index,
-                           color_continuous_scale='Reds',
-                           text=[f"{count}<br>({transfer_pcts[idx]}%)" for idx, count in transfer_dist.items()])
-            fig10.update_layout(title="Transfer Distribution", height=400, showlegend=False)
-            fig10.update_traces(textposition='outside')
-            st.plotly_chart(fig10, use_container_width=True)
-
-        with col2:
-            # Service frequency analysis with percentages - FIXED
-            if df_filtered['Frecuencia_Servicio'].notna().any():
-                fig11 = px.histogram(df_filtered,
-                                     x='Frecuencia_Servicio',
-                                     nbins=20,
-                                     histnorm='percent',
-                                     labels={'Frecuencia_Servicio': 'Service Headway (min)'})
-                fig11.update_layout(title="Service Frequency Distribution",
-                                    yaxis_title="Percentage of Trips (%)",
-                                    height=400)
-                st.plotly_chart(fig11, use_container_width=True)
-            else:
-                st.info("Service frequency data not available")
-
-        # Impact of transfers on travel time
-        st.markdown("**🔄 Impact of Transfers on Travel Time**")
-        transfer_impact = df_filtered.groupby('Numero_Transbordos').agg({
-            'Tiempo_Viaje_Total_Minutos': 'mean',
-            'Tiempo_Espera_Transbordo_Minutos': 'mean',
-            'Zona_Origen': 'count'
-        }).reset_index()
-        transfer_impact.columns = ['Transfers', 'Avg Total Time', 'Avg Wait Time', 'Count']
-
-        fig12 = go.Figure()
-        fig12.add_trace(go.Bar(name='Average Total Travel Time',
-                               x=transfer_impact['Transfers'],
-                               y=transfer_impact['Avg Total Time']))
-        fig12.add_trace(go.Bar(name='Average Transfer Wait Time',
-                               x=transfer_impact['Transfers'],
-                               y=transfer_impact['Avg Wait Time']))
-        fig12.update_layout(barmode='group',
-                            title="Travel Time by Number of Transfers",
-                            xaxis_title="Number of Transfers",
-                            yaxis_title="Time (minutes)",
-                            height=400)
-        st.plotly_chart(fig12, use_container_width=True)
-
-        # Direct connections analysis
-        st.markdown("**🎯 Direct vs. Transfer Connections**")
-        direct_trips = df_filtered[df_filtered['Numero_Transbordos'] == 0]
-        transfer_trips = df_filtered[df_filtered['Numero_Transbordos'] > 0]
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Direct Connections",
-                      f"{len(direct_trips)} ({len(direct_trips) / len(df_filtered) * 100:.1f}%)")
-        with col2:
-            if len(direct_trips) > 0:
-                st.metric("Avg Time - Direct",
-                          f"{direct_trips['Tiempo_Viaje_Total_Minutos'].mean():.1f} min")
-            else:
-                st.metric("Avg Time - Direct", "N/A")
-        with col3:
-            if len(transfer_trips) > 0:
-                st.metric("Avg Time - With Transfers",
-                          f"{transfer_trips['Tiempo_Viaje_Total_Minutos'].mean():.1f} min")
-            else:
-                st.metric("Avg Time - With Transfers", "N/A")
-
-    # TAB 5: Population Coverage
-    with tab5:
-        st.subheader("Population Accessibility Coverage")
-
-        # Population by municipality with accessibility metrics
-        pop_coverage = df_filtered.groupby('Poblacion_Origen').agg({
-            'Zona_Origen': 'nunique',
-            'Tiempo_Viaje_Total_Minutos': 'mean',
-            'Numero_Transbordos': 'mean'
-        }).reset_index()
-        pop_coverage.columns = ['Municipality', 'Zones Served', 'Avg Travel Time', 'Avg Transfers']
-
-        st.markdown("**🏘️ Municipality Service Coverage**")
-        fig13 = px.bar(pop_coverage,
-                       x='Municipality',
-                       y='Zones Served',
-                       color='Avg Travel Time',
-                       color_continuous_scale='RdYlGn_r',
-                       hover_data=['Avg Transfers'])
-        fig13.update_layout(height=400)
-        fig13.update_xaxes(tickangle=45)
-        st.plotly_chart(fig13, use_container_width=True)
-
-        # Accessibility by population (if we had population data)
-        st.markdown("**📊 Accessibility Heatmap by Origin-Destination**")
-
-        # Create pivot table for heatmap
-        heatmap_data = df_filtered.pivot_table(
-            values='Tiempo_Viaje_Total_Minutos',
-            index='Poblacion_Origen',
-            columns='Zona_Destino_nombre',
-            aggfunc='mean'
+        fig6.update_layout(
+            barmode='stack',
+            title='POI Accessibility Quality Distribution (Population-Weighted)',
+            xaxis_title='Percentage of Population (%)',
+            yaxis_title='Destination POI',
+            height=max(400, len(poi_df) * 25),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
 
-        fig14 = px.imshow(heatmap_data,
-                          labels=dict(x="Destination POI", y="Origin Municipality",
-                                      color="Travel Time (min)"),
-                          color_continuous_scale='RdYlGn_r',
-                          aspect="auto")
-        fig14.update_layout(height=500)
-        st.plotly_chart(fig14, use_container_width=True)
+        st.plotly_chart(fig6, use_container_width=True)
 
-        # Best and worst connected population centers
-        col1, col2 = st.columns(2)
+        # Data table
+        st.markdown("#### Detailed POI Statistics")
+        display_df = poi_df[['POI', 'Avg Time', 'Total Population', 'Excellent (%)', 'Good (%)', 'Poor (%)']].copy()
+        st.dataframe(
+            display_df.style.format({
+                'Avg Time': '{:.1f} min',
+                'Total Population': '{:,.0f}',
+                'Excellent (%)': '{:.1f}%',
+                'Good (%)': '{:.1f}%',
+                'Poor (%)': '{:.1f}%'
+            }).background_gradient(subset=['Avg Time'], cmap='RdYlGn_r'),
+            hide_index=True,
+            use_container_width=True,
+            height=400
+        )
+
+    # TAB 3: Priority Areas
+    with tab3:
+        st.subheader("Priority Areas for Service Improvement")
+        st.markdown("*Origin zones with poor accessibility affecting the most residents*")
+
+        # Calculate zone-level statistics with POPULATION
+        zone_stats = df_filtered.groupby(['Zona_Origen_nombre', 'Zona_Origen']).agg({
+            'Tiempo_Viaje_Total_Minutos': 'mean',
+            'Zona_Destino': 'count',
+            'Numero_Transbordos': 'mean',
+            'Poblacion_Origen': 'first'
+        }).reset_index()
+        zone_stats.columns = ['Origin Zone', 'Zone_ID', 'Avg Travel Time', 'Destinations Served', 'Avg Transfers',
+                              'Population']
+
+        # Identify poor connections (>45min average) with high population
+        poor_zones = zone_stats[zone_stats['Avg Travel Time'] > 45].sort_values('Population', ascending=False)
+
+        col1, col2 = st.columns([3, 2])
 
         with col1:
-            st.markdown("**🟢 Best Connected Municipalities**")
-            best_munis = pop_coverage.sort_values('Avg Travel Time').head(5)
-            st.dataframe(best_munis.style.format({
-                'Avg Travel Time': '{:.1f} min',
-                'Avg Transfers': '{:.2f}'
-            }), hide_index=True)
+            st.markdown("#### 🔴 High-Population Zones with Worst Accessibility")
+            st.markdown(
+                f"**{len(poor_zones)} zones** with {poor_zones['Population'].sum():,.0f} residents have average travel times exceeding 45 minutes")
+
+            top_poor = poor_zones.head(15)
+            fig7 = px.bar(
+                top_poor,
+                x='Population',
+                y='Origin Zone',
+                orientation='h',
+                color='Avg Travel Time',
+                color_continuous_scale='Reds',
+                hover_data=['Avg Transfers', 'Destinations Served'],
+                text='Population'
+            )
+            fig7.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+            fig7.update_layout(
+                height=500,
+                yaxis={'categoryorder': 'total ascending'},
+                xaxis_title='Population (residents)',
+                yaxis_title='Origin Zone'
+            )
+            st.plotly_chart(fig7, use_container_width=True)
 
         with col2:
-            st.markdown("**🔴 Least Connected Municipalities**")
-            worst_munis = pop_coverage.sort_values('Avg Travel Time', ascending=False).head(5)
-            st.dataframe(worst_munis.style.format({
-                'Avg Travel Time': '{:.1f} min',
-                'Avg Transfers': '{:.2f}'
-            }), hide_index=True)
+            st.markdown("#### Key Impact Metrics")
 
-    # TAB 6: Service Quality - FIXED
-    with tab6:
-        st.subheader("Service Quality Indicators")
+            avg_poor = poor_zones['Avg Travel Time'].mean()
+            avg_transfers_poor = poor_zones['Avg Transfers'].mean()
+            total_affected_pop = poor_zones['Population'].sum()
+            pct_affected = (total_affected_pop / total_population * 100) if total_population > 0 else 0
 
-        # Overall service quality score (0-100) - FIXED calculations
-        # Handle division by zero and NaN values
-        max_travel = df_filtered['Tiempo_Viaje_Total_Minutos'].max()
-        max_transfers = df_filtered['Numero_Transbordos'].max()
-        max_walking = (df_filtered['Tiempo_Acceso_Minutos'] + df_filtered['Tiempo_Salida_Minutos']).max()
+            st.error(f"**Average travel time in poor zones:** {avg_poor:.1f} minutes")
+            st.warning(f"**Average transfers needed:** {avg_transfers_poor:.2f}")
+            st.info(f"**Population affected:** {total_affected_pop:,.0f} residents ({pct_affected:.1f}% of total)")
 
-        # Avoid division by zero
-        travel_score = 0 if max_travel == 0 else (df_filtered['Tiempo_Viaje_Total_Minutos'] / max_travel * 40)
-        transfer_score = 0 if max_transfers == 0 else (df_filtered['Numero_Transbordos'] / max_transfers * 30)
-        walking_score = 0 if max_walking == 0 else (
-                    (df_filtered['Tiempo_Acceso_Minutos'] + df_filtered['Tiempo_Salida_Minutos']) / max_walking * 30)
+            # Top affected zones list
+            st.markdown("#### Most Critical Zones")
+            st.markdown("*(by population affected)*")
+            for idx, row in poor_zones.head(5).iterrows():
+                st.write(f"**{row['Origin Zone']}**")
+                st.write(f"→ {row['Population']:,.0f} residents, {row['Avg Travel Time']:.1f} min avg")
+                st.write("---")
+                Issues
+                ")
 
-        df_filtered['Quality_Score'] = 100 - travel_score - transfer_score - walking_score
+            avg_poor = poor_zones['Avg Travel Time'].mean()
+            avg_transfers_poor = poor_zones['Avg Transfers'].mean()
 
-        # Replace any NaN or infinite values
-        df_filtered['Quality_Score'] = df_filtered['Quality_Score'].replace([np.inf, -np.inf], np.nan)
-        df_filtered['Quality_Score'] = df_filtered['Quality_Score'].fillna(0)
+            st.error(f"**Average travel time in poor zones:** {avg_poor:.1f} minutes")
+            st.warning(f"**Average transfers needed:** {avg_transfers_poor:.2f}")
+            st.info(
+                f"**Zones affected:** {len(poor_zones)} out of {len(zone_stats)} ({len(poor_zones) / len(zone_stats) * 100:.1f}%)")
 
-        avg_quality = df_filtered['Quality_Score'].mean()
+            # Municipality breakdown
+            st.markdown("#### Affected Municipalities")
+            poor_by_muni = poor_zones.groupby('Municipality').size().sort_values(ascending=False)
 
+            for muni, count in poor_by_muni.head(5).items():
+                total_in_muni = zone_stats[zone_stats['Municipality'] == muni].shape[0]
+                pct = count / total_in_muni * 100
+                st.write(f"**{muni}**: {count}/{total_in_muni} zones ({pct:.1f}%)")
+
+        # Problem matrix: POI vs Origin zones with poor access (population-weighted)
+        st.markdown("---")
+        st.markdown("#### Problem Matrix: Which populations struggle to reach which POIs?")
+        st.markdown("*Color intensity = population affected, Red = poor access (>60min)*")
+
+        # Filter for problematic connections
+        problem_connections = df_filtered[df_filtered['Tiempo_Viaje_Total_Minutos'] > 45].copy()
+
+        if len(problem_connections) > 0:
+            # Get zones with highest population impact
+            zone_pop_impact = problem_connections.groupby('Zona_Origen_nombre').agg({
+                'Poblacion_Origen': 'first'
+            }).sort_values('Poblacion_Origen', ascending=False)
+            top_problem_zones = zone_pop_impact.head(10).index
+
+            # Get most problematic POIs
+            top_problem_pois = problem_connections.groupby('Zona_Destino_nombre').agg({
+                'Poblacion_Origen': 'sum'
+            }).sort_values('Poblacion_Origen', ascending=False).head(8).index
+
+            # Create pivot table with population weighting
+            problem_matrix = problem_connections[
+                (problem_connections['Zona_Origen_nombre'].isin(top_problem_zones)) &
+                (problem_connections['Zona_Destino_nombre'].isin(top_problem_pois))
+                ].pivot_table(
+                values='Tiempo_Viaje_Total_Minutos',
+                index='Zona_Origen_nombre',
+                columns='Zona_Destino_nombre',
+                aggfunc='mean'
+            )
+
+            fig8 = px.imshow(
+                problem_matrix,
+                color_continuous_scale='RdYlGn_r',
+                aspect='auto',
+                labels=dict(x="Destination POI", y="Origin Zone (by population)", color="Travel Time (min)")
+            )
+            fig8.update_layout(height=500)
+            st.plotly_chart(fig8, use_container_width=True)
+        else:
+            st.success("No problematic connections found with current filters!")
+
+    # TAB 4: Distance Efficiency
+    with tab4:
+        st.subheader("Distance vs Travel Time Efficiency")
+        st.markdown("*Identifying where service is slow despite short distances*")
+
+        # Calculate time per km
+        df_filtered['Time_per_Km'] = df_filtered['Tiempo_Viaje_Total_Minutos'] / df_filtered['Distancia_Viaje_Total_Km']
+        df_filtered['Time_per_Km'] = df_filtered['Time_per_Km'].replace([np.inf, -np.inf], np.nan)
+
+        # Scatter plot: Distance vs Time
+        fig9 = px.scatter(
+            df_filtered,
+            x='Distancia_Viaje_Total_Km',
+            y='Tiempo_Viaje_Total_Minutos',
+            color='Numero_Transbordos',
+            hover_data=['Zona_Origen_nombre', 'Zona_Destino_nombre', 'Poblacion_Origen'],
+            opacity=0.6,
+            color_continuous_scale='Reds',
+            labels={
+                'Distancia_Viaje_Total_Km': 'Distance (km)',
+                'Tiempo_Viaje_Total_Minutos': 'Travel Time (min)',
+                'Numero_Transbordos': 'Transfers'
+            }
+        )
+
+        # Add reference line for ideal speed (e.g., 30 km/h average)
+        max_dist = df_filtered['Distancia_Viaje_Total_Km'].max()
+        fig9.add_trace(go.Scatter(
+            x=[0, max_dist],
+            y=[0, max_dist * 2],  # 30 km/h = 2 min/km
+            mode='lines',
+            name='Ideal (30 km/h avg)',
+            line=dict(color='green', dash='dash')
+        ))
+
+        fig9.update_layout(
+            title='Travel Time vs Distance (connections above the line are slower than ideal)',
+            height=500
+        )
+        st.plotly_chart(fig9, use_container_width=True)
+
+        # Efficiency metrics
         col1, col2, col3 = st.columns(3)
+
         with col1:
-            st.metric("Overall Service Quality Score", f"{avg_quality:.1f}/100")
+            avg_time_per_km = df_filtered['Time_per_Km'].mean()
+            st.metric("Avg Time per Km", f"{avg_time_per_km:.1f} min/km")
+
         with col2:
-            excellent_pct = (df_filtered['Quality_Score'] >= 70).sum() / len(df_filtered) * 100
-            st.metric("Excellent Quality Connections", f"{excellent_pct:.1f}%")
+            avg_speed = 60 / avg_time_per_km if avg_time_per_km > 0 else 0
+            st.metric("Avg Effective Speed", f"{avg_speed:.1f} km/h")
+
         with col3:
-            poor_pct = (df_filtered['Quality_Score'] < 40).sum() / len(df_filtered) * 100
-            st.metric("Poor Quality Connections", f"{poor_pct:.1f}%")
+            inefficient = (df_filtered['Time_per_Km'] > 3).sum() / len(df_filtered) * 100
+            st.metric("Inefficient Connections", f"{inefficient:.1f}%",
+                      help="Connections with >3 min/km (slower than 20 km/h)")
 
-        # Quality distribution with percentages - FIXED
-        st.markdown("**📊 Service Quality Distribution**")
-        fig15 = px.histogram(df_filtered,
-                             x='Quality_Score',
-                             nbins=20,
-                             histnorm='percent',
-                             color_discrete_sequence=['#2ca02c'])
-        fig15.update_layout(title="Distribution of Service Quality Scores",
-                            xaxis_title="Quality Score (0-100)",
-                            yaxis_title="Percentage of Connections (%)",
-                            height=400)
-        st.plotly_chart(fig15, use_container_width=True)
+        # Municipality efficiency comparison
+        st.markdown("---")
+        st.markdown("#### Efficiency by Zone (Population-Weighted)")
 
-        # Quality by municipality
-        st.markdown("**🏆 Service Quality by Municipality**")
-        quality_by_muni = df_filtered.groupby('Poblacion_Origen')['Quality_Score'].mean().sort_values(ascending=False)
+        zone_efficiency = df_filtered.groupby(['Zona_Origen_nombre', 'Zona_Origen']).agg({
+            'Time_per_Km': 'mean',
+            'Distancia_Viaje_Total_Km': 'mean',
+            'Tiempo_Viaje_Total_Minutos': 'mean',
+            'Poblacion_Origen': 'first'
+        }).reset_index()
+        zone_efficiency.columns = ['Zone', 'Zone_ID', 'Min per Km', 'Avg Distance (km)', 'Avg Time (min)', 'Population']
+        zone_efficiency['Effective Speed (km/h)'] = 60 / zone_efficiency['Min per Km']
+        zone_efficiency = zone_efficiency.sort_values('Population', ascending=False).head(20)
 
-        fig16 = px.bar(x=quality_by_muni.index,
-                       y=quality_by_muni.values,
-                       color=quality_by_muni.values,
-                       color_continuous_scale='RdYlGn')
-        fig16.update_layout(title="Average Quality Score by Origin Municipality",
-                            xaxis_title="Municipality",
-                            yaxis_title="Quality Score",
-                            showlegend=False,
-                            height=400)
-        fig16.update_xaxes(tickangle=45)
-        st.plotly_chart(fig16, use_container_width=True)
+        fig10 = px.bar(
+            zone_efficiency.sort_values('Min per Km', ascending=False),
+            x='Zone',
+            y='Min per Km',
+            color='Min per Km',
+            color_continuous_scale='RdYlGn_r',
+            hover_data={'Effective Speed (km/h)': ':.1f', 'Avg Distance (km)': ':.1f',
+                        'Avg Time (min)': ':.1f', 'Population': ':,.0f'}
+        )
+        fig10.update_layout(
+            title='Travel Time Efficiency by Zone (Top 20 by population, lower is better)',
+            xaxis_title='Origin Zone',
+            yaxis_title='Average Minutes per Kilometer',
+            height=400
+        )
+        fig10.update_xaxes(tickangle=45)
+        st.plotly_chart(fig10, use_container_width=True)
 
-        # Walking distances analysis
-        st.markdown("**🚶 Walking Distance Analysis (Access + Egress)**")
-        df_filtered['Total_Walking_Distance'] = (df_filtered['Distancia_Acceso_Metros'] +
-                                                 df_filtered['Distancia_Salida_Metros'])
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            avg_walking = df_filtered['Total_Walking_Distance'].mean()
-            st.metric("Average Walking Distance", f"{avg_walking:.0f} m")
-
-            walking_categories = pd.cut(df_filtered['Total_Walking_Distance'],
-                                        bins=[0, 500, 1000, 2000, float('inf')],
-                                        labels=['<500m', '500-1000m', '1-2km', '>2km'])
-            walking_dist = walking_categories.value_counts()
-            walking_pcts = (walking_dist / len(df_filtered) * 100).round(1)
-
-            # Add percentages to labels
-            labels_walk = [f"{cat}: {walking_dist[cat]} ({walking_pcts[cat]}%)" for cat in walking_dist.index]
-
-            fig17 = px.pie(values=walking_dist.values,
-                           names=labels_walk,
-                           title="Walking Distance Distribution")
-            st.plotly_chart(fig17, use_container_width=True)
-
-        with col2:
-            # Walking time analysis
-            df_filtered['Total_Walking_Time'] = (df_filtered['Tiempo_Acceso_Minutos'] +
-                                                 df_filtered['Tiempo_Salida_Minutos'])
-            avg_walking_time = df_filtered['Total_Walking_Time'].mean()
-            st.metric("Average Walking Time", f"{avg_walking_time:.1f} min")
-
-            fig18 = px.box(df_filtered,
-                           y='Total_Walking_Time',
-                           title="Walking Time Distribution")
-            fig18.update_layout(yaxis_title="Total Walking Time (min)")
-            st.plotly_chart(fig18, use_container_width=True)
-
-    # Download section
-    st.header("📥 Download Analysis Report")
-
-    # Create summary statistics
-    summary_stats = pd.DataFrame({
-        'Metric': [
-            'Total Origin Zones',
-            'Total POIs',
-            'Average Travel Time (min)',
-            'Average Transfers',
-            'Average Walking Distance (m)',
-            'Public Transport Usage (%)',
-            'Direct Connections (%)',
-            'Overall Quality Score'
-        ],
-        'Value': [
-            df_filtered['Zona_Origen'].nunique(),
-            df_filtered['Zona_Destino'].nunique(),
-            f"{df_filtered['Tiempo_Viaje_Total_Minutos'].mean():.1f}",
-            f"{df_filtered['Numero_Transbordos'].mean():.2f}",
-            f"{df_filtered['Total_Walking_Distance'].mean():.0f}",
-            f"{(df['Usa_Transporte_Publico'].sum() / len(df) * 100):.1f}",
-            f"{(df_filtered['Numero_Transbordos'] == 0).sum() / len(df_filtered) * 100:.1f}",
-            f"{avg_quality:.1f}"
-        ]
-    })
-
-    st.dataframe(summary_stats, hide_index=True, use_container_width=True)
-
-    # Convert to CSV for download
-    csv = summary_stats.to_csv(index=False)
-    st.download_button(
-        label="Download Summary Statistics (CSV)",
-        data=csv,
-        file_name="bizkaia_accessibility_summary.csv",
-        mime="text/csv"
-    )
+        # Data table
+        st.markdown("#### Zone Efficiency Rankings (Top 20 by Population)")
+        display_efficiency = zone_efficiency.sort_values('Min per Km')
+        st.dataframe(
+            display_efficiency[['Zone', 'Population', 'Min per Km', 'Avg Distance (km)',
+                                'Avg Time (min)', 'Effective Speed (km/h)']].style.format({
+                'Population': '{:,.0f}',
+                'Min per Km': '{:.2f}',
+                'Avg Distance (km)': '{:.1f}',
+                'Avg Time (min)': '{:.1f}',
+                'Effective Speed (km/h)': '{:.1f}'
+            }).background_gradient(subset=['Min per Km'], cmap='RdYlGn_r'),
+            hide_index=True,
+            use_container_width=True
+        )
 
 else:
     st.info("👆 Please upload an Excel file to begin the analysis")
 
     st.markdown("""
-    ### Expected Data Structure
-    The uploaded file should contain the following columns:
-    - Origin and destination zone information
-    - Public transport usage indicator
-    - Travel time components (access, in-vehicle, transfer wait, egress)
-    - Distance metrics
-    - Number of transfers
-    - Service frequency
+    ### This tool analyzes:
 
-    This analysis will provide insights into:
-    - ✅ Best and worst connected zones
-    - 📍 POI accessibility rankings
-    - ⏱️ Travel time breakdowns
-    - 🔄 Transfer patterns and impacts
-    - 👥 Population coverage analysis
-    - 📈 Overall service quality metrics
+    1. **📊 Accessibility Overview**
+       - What % of **population** has good/poor connections
+       - Travel time distribution across the network
+       - Zone-level performance comparison (weighted by population)
+
+    2. **📍 POI Analysis**
+       - Which destinations are well/poorly connected
+       - % of **population** that can reach each POI easily
+       - Accessibility quality breakdown by POI (population-weighted)
+
+    3. **⚠️ Priority Areas**
+       - Zones with worst accessibility and **highest population impact**
+       - Which populations are most affected
+       - Problem matrix showing which origin-destination pairs need improvement
+
+    4. **📊 Distance Efficiency**
+       - Are travel times reasonable given distances?
+       - Which high-population areas have inefficient service
+       - Zone efficiency rankings
+
+    ### Key Metrics Used:
+    - **Travel Time**: Tiempo_Viaje_Total_Minutos (door-to-door)
+    - **Origin Zone**: Zona_Origen (zone ID), Zona_Origen_nombre (zone name)
+    - **Population**: Poblacion_Origen (number of residents in each origin zone)
+    - **Destination**: Zona_Destino_nombre (POI name)
+    - **Distance**: Distancia_Viaje_Total_Km
+    - **Transfers**: Numero_Transbordos
+
+    ### Important:
+    All percentages and statistics are **population-weighted**, meaning they reflect the actual number of residents affected, not just geographic coverage.
     """)
