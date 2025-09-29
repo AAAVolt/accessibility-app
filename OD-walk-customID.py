@@ -344,7 +344,7 @@ if __name__ == "__main__":
         print(results[available_cols].head().to_string(index=False))
 
         # Save results
-        save_results(results, 'accessibility_with_times_quiron.csv')
+        save_results(results, 'results/accessibility_with_times_quiron.csv')
 
         # Create summary by origin zones with accessibility scores
         if 'Mejor_JRT' in results.columns:

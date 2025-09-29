@@ -340,7 +340,7 @@ if __name__ == "__main__":
         print(results[sample_cols].head().to_string(index=False))
 
         # Save results
-        save_results(results, 'accessibility_results_with_times.csv')
+        save_results(results, 'results/accessibility_results_with_times.csv')
 
         # Create summary by origin zones with accessibility scores
         if 'Mapeada_JRT' in results.columns:
