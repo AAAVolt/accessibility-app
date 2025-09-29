@@ -534,18 +534,18 @@ if uploaded_file is not None:
             }
         )
 
-        # Add reference line for ideal speed (30 km/h average = 2 min/km)
+        # Add reference line for ideal speed (20 km/h average = 3 min/km)
         max_dist = df_filtered['Distancia_Viaje_Total_Km'].max()
         fig9.add_trace(go.Scatter(
             x=[0, max_dist],
-            y=[0, max_dist * 2],
+            y=[0, max_dist * 3],
             mode='lines',
-            name='Ideal (30 km/h avg)',
+            name='Ideal (20 km/h avg)',
             line=dict(color='green', dash='dash', width=2)
         ))
 
         fig9.update_layout(
-            title='Travel Time vs Distance (points above green line are slower than 30 km/h average)',
+            title='Travel Time vs Distance (points above green line are slower than 20 km/h average)',
             height=500
         )
         st.plotly_chart(fig9, use_container_width=True)
