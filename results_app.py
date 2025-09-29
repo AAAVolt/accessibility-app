@@ -13,6 +13,8 @@ st.markdown("""
 **Policy-focused analysis of Bizkaibus service accessibility**  
 *Identifying priority areas for service improvement based on population and travel time*
 """)
+st.set_page_config(page_title="Bizkaia Accessibility Analysis", layout="wide", page_icon="🚌")
+
 
 # Methodology expander
 with st.expander("📋 Methodology & Data Structure", expanded=False):
@@ -228,7 +230,7 @@ if uploaded_file is not None:
             mode='lines',
             name='Density Curve',
             line=dict(color='red', width=3),
-            showlegend=True
+            showlegend=False
         ))
         fig2.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="30 min")
         fig2.add_vline(x=45, line_dash="dash", line_color="orange", annotation_text="45 min")
