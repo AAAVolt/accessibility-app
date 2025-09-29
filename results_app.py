@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from scipy import stats
 
 st.set_page_config(page_title="Bizkaia Accessibility Analysis", layout="wide", page_icon="🚌")
 
@@ -214,6 +215,21 @@ if uploaded_file is not None:
             histnorm='percent',
             color_discrete_sequence=['#3498db']
         )
+        travel_times = df_filtered['Tiempo_Viaje_Total_Minutos'].dropna()
+        kde = stats.gaussian_kde(travel_times)
+        x_range = np.linspace(travel_times.min(), travel_times.max(), 200)
+        y_kde = kde(x_range)
+        # Normalize to match histogram scale (percent)
+        y_kde_normalized = y_kde * 100 * (travel_times.max() - travel_times.min()) / 40  # 40 = nbins
+
+        fig2.add_trace(go.Scatter(
+            x=x_range,
+            y=y_kde_normalized,
+            mode='lines',
+            name='Density Curve',
+            line=dict(color='red', width=3),
+            showlegend=True
+        ))
         fig2.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="30 min")
         fig2.add_vline(x=45, line_dash="dash", line_color="orange", annotation_text="45 min")
         fig2.add_vline(x=60, line_dash="dash", line_color="red", annotation_text="60 min")
@@ -224,46 +240,7 @@ if uploaded_file is not None:
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-        # Zone comparison
-        st.markdown("---")
-        st.markdown("### Accessibility by Zone")
-        st.markdown("*Average travel time and percentage of POIs reachable within 45 min (bubble size = population)*")
 
-        # Calculate zone-level statistics
-        zone_stats = df_filtered.groupby('Zona_Origen').agg({
-            'Tiempo_Viaje_Total_Minutos': 'mean',
-            'Zona_Origen_nombre': 'first',
-            'Poblacion_Origen': 'first',
-            'Zona_Destino': 'count'
-        }).reset_index()
-
-        # Calculate % of POIs reachable within 45 min per zone
-        good_connections = df_filtered[df_filtered['Tiempo_Viaje_Total_Minutos'] <= 45].groupby('Zona_Origen')[
-            'Zona_Destino'].count()
-        zone_stats['Good_Connection_Pct'] = (good_connections / zone_stats['Zona_Destino'] * 100).fillna(0)
-
-        zone_stats.columns = ['Zone_ID', 'Avg Travel Time (min)', 'Zone Name', 'Population', 'Total Connections',
-                              'POIs Reachable <45min (%)']
-
-        fig3 = px.scatter(
-            zone_stats,
-            x='Avg Travel Time (min)',
-            y='POIs Reachable <45min (%)',
-            size='Population',
-            text='Zone Name',
-            color='Avg Travel Time (min)',
-            color_continuous_scale='RdYlGn_r',
-            size_max=60,
-            hover_data={'Population': ':,.0f', 'Total Connections': True}
-        )
-        fig3.update_traces(textposition='top center', textfont_size=8)
-        fig3.update_layout(
-            title="Zone Performance: Travel Time vs POI Accessibility (bubble size = population)",
-            height=500,
-            xaxis_title="Average Travel Time to POIs (minutes)",
-            yaxis_title="% of POIs Reachable within 45 min"
-        )
-        st.plotly_chart(fig3, use_container_width=True)
 
     # TAB 2: POI Analysis
     with tab2:
