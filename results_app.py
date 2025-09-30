@@ -215,7 +215,7 @@ if uploaded_file is not None:
             x='Tiempo_Viaje_Total_Minutos',
             nbins=40,
             histnorm='percent',
-            color_discrete_sequence=['#3498db']
+            color_discrete_sequence=['#C00000']
         )
         travel_times = df_filtered['Tiempo_Viaje_Total_Minutos'].dropna()
         kde = stats.gaussian_kde(travel_times)
@@ -229,7 +229,7 @@ if uploaded_file is not None:
             y=y_kde_normalized,
             mode='lines',
             name='Density Curve',
-            line=dict(color='red', width=3),
+            line=dict(color='blue', width=3),
             showlegend=False
         ))
         fig2.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="30 min")
