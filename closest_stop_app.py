@@ -62,13 +62,6 @@ if uploaded_file is not None:
     # Clean column names
     df.columns = df.columns.str.strip()
 
-    # DEBUG: Print actual column names
-    st.write("**Column names in your file:**")
-    st.write(df.columns.tolist())
-
-    # Clean column names
-    df.columns = df.columns.str.strip()
-
     # Calculate walking time (assuming 80m/min walking speed)
     df['walk_time_min'] = df['dist_m'] / 80
 
@@ -88,12 +81,14 @@ if uploaded_file is not None:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        avg_distance = df['dist_m'].mean()
-        st.metric("Avg Distance to Stop", f"{avg_distance:.0f}m")
+        # Population-weighted average distance
+        weighted_avg_distance = (df['dist_m'] * df['Pop']).sum() / total_population
+        st.metric("Avg Distance to Stop", f"{weighted_avg_distance:.0f}m")
 
     with col2:
-        avg_walk_time = df['walk_time_min'].mean()
-        st.metric("Avg Walk Time", f"{avg_walk_time:.1f} min")
+        # Population-weighted average walk time
+        weighted_avg_walk_time = (df['walk_time_min'] * df['Pop']).sum() / total_population
+        st.metric("Avg Walk Time", f"{weighted_avg_walk_time:.1f} min")
 
     with col3:
         pop_within_500m = df[df['dist_m'] <= 500]['Pop'].sum()
@@ -101,14 +96,18 @@ if uploaded_file is not None:
         st.metric("Pop within 500m", f"{pct_within_500m:.1f}%")
 
     with col4:
-        median_distance = df['dist_m'].median()
-        st.metric("Median Distance", f"{median_distance:.0f}m")
+        # Population-weighted median (approximation using cumulative sum)
+        df_sorted = df.sort_values('dist_m')
+        df_sorted['cumsum_pop'] = df_sorted['Pop'].cumsum()
+        median_idx = (df_sorted['cumsum_pop'] >= total_population / 2).idxmax()
+        pop_weighted_median = df_sorted.loc[median_idx, 'dist_m']
+        st.metric("Median Distance (pop-weighted)", f"{pop_weighted_median:.0f}m")
 
     # Create tabs
     tab1, tab2, tab3 = st.tabs([
         "🎯 Accessibility Overview",
         "⚠️ Priority Areas",
-        "📍 Municipality Breakdown"
+        "🏛 Municipality Breakdown"
     ])
 
     # TAB 1: Accessibility Overview
@@ -169,11 +168,87 @@ if uploaded_file is not None:
                 else:
                     st.error(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
 
-        # Distance distribution histogram
+        # Distance distribution histogram - POPULATION WEIGHTED
         st.markdown("---")
-        st.markdown("### Distance Distribution to Nearest Bus Stop")
+        st.markdown("### Distance Distribution to Nearest Bus Stop (Population-Weighted)")
+        st.markdown("*Shows what % of the population experiences each distance range*")
 
-        fig2 = px.histogram(
+        # Create bins manually with population weighting
+        bins = np.linspace(df['dist_m'].min(), df['dist_m'].max(), 51)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        # Calculate population in each bin
+        bin_populations = []
+        for i in range(len(bins) - 1):
+            mask = (df['dist_m'] >= bins[i]) & (df['dist_m'] < bins[i + 1])
+            pop_in_bin = df[mask]['Pop'].sum()
+            bin_populations.append(pop_in_bin / total_population * 100)
+
+        # Create bar chart
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=bin_centers,
+            y=bin_populations,
+            marker_color='#EBEBEB',
+            width=(bins[1] - bins[0]) * 0.9,
+            showlegend=False
+        ))
+
+        # Add KDE curve - population weighted
+        distances_weighted = []
+        for _, row in df.iterrows():
+            distances_weighted.extend([row['dist_m']] * int(row['Pop'] / 100))
+
+        if len(distances_weighted) > 0:
+            distances_weighted = np.array(distances_weighted)
+            kde = stats.gaussian_kde(distances_weighted)
+            x_range = np.linspace(df['dist_m'].min(), df['dist_m'].max(), 200)
+            y_kde = kde(x_range)
+            y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
+
+            fig2.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_scaled,
+                mode='lines',
+                name='Density Curve',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+        # Calculate population percentages at each threshold
+        pop_under_300 = df[df['dist_m'] <= 300]['Pop'].sum()
+        pop_under_500 = df[df['dist_m'] <= 500]['Pop'].sum()
+        pop_under_1000 = df[df['dist_m'] <= 1000]['Pop'].sum()
+
+        pct_under_300 = (pop_under_300 / total_population * 100) if total_population > 0 else 0
+        pct_under_500 = (pop_under_500 / total_population * 100) if total_population > 0 else 0
+        pct_under_1000 = (pop_under_1000 / total_population * 100) if total_population > 0 else 0
+
+        # Add reference lines with percentages
+        fig2.add_vline(x=300, line_dash="dash", line_color="green",
+                       annotation_text=f"300m<br>({pct_under_300:.1f}%)",
+                       annotation_position="top")
+        fig2.add_vline(x=500, line_dash="dash", line_color="orange",
+                       annotation_text=f"500m<br>({pct_under_500:.1f}%)",
+                       annotation_position="top")
+        fig2.add_vline(x=1000, line_dash="dash", line_color="red",
+                       annotation_text=f"1000m<br>({pct_under_1000:.1f}%)",
+                       annotation_position="top")
+
+        fig2.update_layout(
+            xaxis_title="Distance to Nearest Bus Stop (meters)",
+            yaxis_title="Percentage of Population (%)",
+            xaxis_range=[0, df['dist_m'].max()],
+            height=400
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+        # Distance distribution by ZONES (not population-weighted)
+        st.markdown("---")
+        st.markdown("### Distance Distribution by Zones")
+        st.markdown("*Shows what % of zones have each distance range (not weighted by population)*")
+
+        fig2b = px.histogram(
             df,
             x='dist_m',
             nbins=50,
@@ -189,7 +264,7 @@ if uploaded_file is not None:
             y_kde = kde(x_range)
             y_kde_normalized = y_kde * 100 * (distances.max() - distances.min()) / 50
 
-            fig2.add_trace(go.Scatter(
+            fig2b.add_trace(go.Scatter(
                 x=x_range,
                 y=y_kde_normalized,
                 mode='lines',
@@ -198,63 +273,164 @@ if uploaded_file is not None:
                 showlegend=False
             ))
 
-        # Add reference lines
-        fig2.add_vline(x=300, line_dash="dash", line_color="green",
-                       annotation_text="300m")
-        fig2.add_vline(x=500, line_dash="dash", line_color="orange",
-                       annotation_text="500m")
-        fig2.add_vline(x=1000, line_dash="dash", line_color="red",
-                       annotation_text="1000m")
+        # Calculate zone percentages at each threshold
+        total_zones = len(df)
+        zones_under_300 = (df['dist_m'] <= 300).sum()
+        zones_under_500 = (df['dist_m'] <= 500).sum()
+        zones_under_1000 = (df['dist_m'] <= 1000).sum()
 
-        fig2.update_layout(
+        pct_zones_300 = (zones_under_300 / total_zones * 100) if total_zones > 0 else 0
+        pct_zones_500 = (zones_under_500 / total_zones * 100) if total_zones > 0 else 0
+        pct_zones_1000 = (zones_under_1000 / total_zones * 100) if total_zones > 0 else 0
+
+        fig2b.add_vline(x=300, line_dash="dash", line_color="green",
+                        annotation_text=f"300m<br>({pct_zones_300:.1f}% zones)",
+                        annotation_position="top")
+        fig2b.add_vline(x=500, line_dash="dash", line_color="orange",
+                        annotation_text=f"500m<br>({pct_zones_500:.1f}% zones)",
+                        annotation_position="top")
+        fig2b.add_vline(x=1000, line_dash="dash", line_color="red",
+                        annotation_text=f"1000m<br>({pct_zones_1000:.1f}% zones)",
+                        annotation_position="top")
+
+        fig2b.update_layout(
             xaxis_title="Distance to Nearest Bus Stop (meters)",
             yaxis_title="Percentage of Zones (%)",
+            xaxis_range=[0, df['dist_m'].max()],
             height=400
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2b, use_container_width=True)
 
-        # Walking time distribution
+        # Walking time distribution - POPULATION WEIGHTED
         st.markdown("---")
-        st.markdown("### Walking Time Distribution")
+        st.markdown("### Walking Time Distribution (Population-Weighted)")
+        st.markdown("*Shows what % of the population experiences each walking time range*")
 
-        fig3 = px.histogram(
+        # Create bins manually with population weighting
+        bins_time = np.linspace(df['walk_time_min'].min(), df['walk_time_min'].max(), 41)
+        bin_centers_time = (bins_time[:-1] + bins_time[1:]) / 2
+
+        # Calculate population in each bin
+        bin_populations_time = []
+        for i in range(len(bins_time) - 1):
+            mask = (df['walk_time_min'] >= bins_time[i]) & (df['walk_time_min'] < bins_time[i + 1])
+            pop_in_bin = df[mask]['Pop'].sum()
+            bin_populations_time.append(pop_in_bin / total_population * 100)
+
+        # Create bar chart
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(
+            x=bin_centers_time,
+            y=bin_populations_time,
+            marker_color='#EBEBEB',
+            width=(bins_time[1] - bins_time[0]) * 0.9,
+            showlegend=False
+        ))
+
+        # Add KDE curve - population weighted
+        walk_times_weighted = []
+        for _, row in df.iterrows():
+            walk_times_weighted.extend([row['walk_time_min']] * int(row['Pop'] / 100))
+
+        if len(walk_times_weighted) > 0:
+            walk_times_weighted = np.array(walk_times_weighted)
+            kde = stats.gaussian_kde(walk_times_weighted)
+            x_range = np.linspace(df['walk_time_min'].min(), df['walk_time_min'].max(), 200)
+            y_kde = kde(x_range)
+            y_kde_scaled = y_kde * max(bin_populations_time) / y_kde.max() * 0.8
+
+            fig3.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_scaled,
+                mode='lines',
+                name='Density Curve',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+        # Calculate population percentages at each threshold
+        pop_under_5min = df[df['walk_time_min'] <= 5]['Pop'].sum()
+        pop_under_10min = df[df['walk_time_min'] <= 10]['Pop'].sum()
+        pop_under_15min = df[df['walk_time_min'] <= 15]['Pop'].sum()
+
+        pct_under_5min = (pop_under_5min / total_population * 100) if total_population > 0 else 0
+        pct_under_10min = (pop_under_10min / total_population * 100) if total_population > 0 else 0
+        pct_under_15min = (pop_under_15min / total_population * 100) if total_population > 0 else 0
+
+        fig3.add_vline(x=5, line_dash="dash", line_color="green",
+                       annotation_text=f"5 min<br>({pct_under_5min:.1f}%)",
+                       annotation_position="top")
+        fig3.add_vline(x=10, line_dash="dash", line_color="orange",
+                       annotation_text=f"10 min<br>({pct_under_10min:.1f}%)",
+                       annotation_position="top")
+        fig3.add_vline(x=15, line_dash="dash", line_color="red",
+                       annotation_text=f"15 min<br>({pct_under_15min:.1f}%)",
+                       annotation_position="top")
+
+        fig3.update_layout(
+            xaxis_title="Walking Time to Nearest Bus Stop (minutes)",
+            yaxis_title="Percentage of Population (%)",
+            xaxis_range=[0, df['walk_time_min'].max()],
+            height=400
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+
+        # Walking time distribution by ZONES (not population-weighted)
+        st.markdown("---")
+        st.markdown("### Walking Time Distribution by Zones")
+        st.markdown("*Shows what % of zones have each walking time range (not weighted by population)*")
+
+        fig3b = px.histogram(
             df,
             x='walk_time_min',
             nbins=40,
             histnorm='percent',
-            color_discrete_sequence=['#EBEBEB']  # Same gray color as fig2
+            color_discrete_sequence=['#EBEBEB']
         )
 
-        # Add KDE curve (same as fig2)
+        # Add KDE curve
         walk_times = df['walk_time_min'].dropna()
         if len(walk_times) > 1:
             kde = stats.gaussian_kde(walk_times)
             x_range = np.linspace(walk_times.min(), walk_times.max(), 200)
             y_kde = kde(x_range)
-            y_kde_normalized = y_kde * 100 * (walk_times.max() - walk_times.min()) / 40  # 40 = nbins
+            y_kde_normalized = y_kde * 100 * (walk_times.max() - walk_times.min()) / 40
 
-            fig3.add_trace(go.Scatter(
+            fig3b.add_trace(go.Scatter(
                 x=x_range,
                 y=y_kde_normalized,
                 mode='lines',
                 name='Density Curve',
-                line=dict(color='#C00000', width=3),  # Same red color as fig2
+                line=dict(color='#C00000', width=3),
                 showlegend=False
             ))
 
-        fig3.add_vline(x=5, line_dash="dash", line_color="green",
-                       annotation_text="5 min")
-        fig3.add_vline(x=10, line_dash="dash", line_color="orange",
-                       annotation_text="10 min")
-        fig3.add_vline(x=15, line_dash="dash", line_color="red",
-                       annotation_text="15 min")
+        # Calculate zone percentages at each threshold
+        zones_under_5min = (df['walk_time_min'] <= 5).sum()
+        zones_under_10min = (df['walk_time_min'] <= 10).sum()
+        zones_under_15min = (df['walk_time_min'] <= 15).sum()
 
-        fig3.update_layout(
+        pct_zones_5min = (zones_under_5min / total_zones * 100) if total_zones > 0 else 0
+        pct_zones_10min = (zones_under_10min / total_zones * 100) if total_zones > 0 else 0
+        pct_zones_15min = (zones_under_15min / total_zones * 100) if total_zones > 0 else 0
+
+        fig3b.add_vline(x=5, line_dash="dash", line_color="green",
+                        annotation_text=f"5 min<br>({pct_zones_5min:.1f}% zones)",
+                        annotation_position="top")
+        fig3b.add_vline(x=10, line_dash="dash", line_color="orange",
+                        annotation_text=f"10 min<br>({pct_zones_10min:.1f}% zones)",
+                        annotation_position="top")
+        fig3b.add_vline(x=15, line_dash="dash", line_color="red",
+                        annotation_text=f"15 min<br>({pct_zones_15min:.1f}% zones)",
+                        annotation_position="top")
+
+        fig3b.update_layout(
             xaxis_title="Walking Time to Nearest Bus Stop (minutes)",
             yaxis_title="Percentage of Zones (%)",
+            xaxis_range=[0, df['walk_time_min'].max()],
             height=400
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3b, use_container_width=True)
 
     # TAB 2: Priority Areas
     with tab2:
@@ -345,15 +521,28 @@ if uploaded_file is not None:
         st.subheader("Accessibility by Municipality")
         st.markdown("*Comparing bus stop access across different municipalities*")
 
-        # Municipality statistics
+        # Municipality statistics - POPULATION WEIGHTED
         muni_stats = df.groupby('Municipio').agg({
             'Pop': 'sum',
-            'dist_m': 'mean',
-            'walk_time_min': 'mean',
             'origin_id': 'count'
         }).reset_index()
-        muni_stats.columns = ['Municipality', 'Population', 'Avg Distance (m)',
-                              'Avg Walk Time (min)', 'Number of Zones']
+        muni_stats.columns = ['Municipality', 'Population', 'Number of Zones']
+
+        # Calculate population-weighted average distance per municipality
+        weighted_dist_by_muni = df.groupby('Municipio').apply(
+            lambda x: (x['dist_m'] * x['Pop']).sum() / x['Pop'].sum()
+        ).reset_index()
+        weighted_dist_by_muni.columns = ['Municipality', 'Avg Distance (m)']
+
+        # Calculate population-weighted average walk time per municipality
+        weighted_time_by_muni = df.groupby('Municipio').apply(
+            lambda x: (x['walk_time_min'] * x['Pop']).sum() / x['Pop'].sum()
+        ).reset_index()
+        weighted_time_by_muni.columns = ['Municipality', 'Avg Walk Time (min)']
+
+        # Merge statistics
+        muni_stats = muni_stats.merge(weighted_dist_by_muni, on='Municipality')
+        muni_stats = muni_stats.merge(weighted_time_by_muni, on='Municipality')
 
         # Calculate % with good access per municipality
         good_access_by_muni = df[df['dist_m'] <= 500].groupby('Municipio')['Pop'].sum()
@@ -387,7 +576,7 @@ if uploaded_file is not None:
 
         # Municipality comparison table
         st.markdown("---")
-        st.markdown("#### Municipality Statistics")
+        st.markdown("#### Municipality Statistics (Population-Weighted)")
         st.dataframe(
             muni_stats.style.format({
                 'Population': '{:,.0f}',
@@ -406,11 +595,11 @@ else:
     st.info("👆 Please upload an Excel file to begin the analysis")
 
     st.markdown("""
-    ### This simplified tool analyzes:
+    ### This tool analyzes:
 
     1. **🎯 Accessibility Overview**
        - Population distribution by walking distance to nearest bus stop
-       - Distance and walking time distributions
+       - **Population-weighted** distance and walking time distributions
        - Summary statistics on access quality
 
     2. **⚠️ Priority Areas**
@@ -418,9 +607,9 @@ else:
        - Total residents affected by poor access
        - Detailed list of priority zones for service improvement
 
-    3. **📍 Municipality Breakdown**
+    3. **🏛 Municipality Breakdown**
        - Accessibility comparison across municipalities
-       - Population-weighted metrics by administrative area
+       - **Population-weighted** metrics by administrative area
        - Identification of municipalities needing more stops
 
     ### Expected Data Format:
@@ -435,6 +624,7 @@ else:
     ### Key Features:
     - **Population-weighted analysis**: All metrics prioritize areas with more residents
     - **Walking time calculations**: Automatic conversion from distance to time
-    - **Visual distributions**: Histograms and density curves for distance patterns
+    - **Visual distributions**: Population-weighted histograms with density curves
     - **Priority identification**: Highlights zones needing new stops or improved service
+    - **Threshold annotations**: All vertical lines show % of population within each distance/time
     """)

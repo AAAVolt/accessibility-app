@@ -207,24 +207,102 @@ if uploaded_file is not None:
                 else:
                     st.error(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
 
-        # Travel time distribution histogram
+        # Travel time distribution histogram - POPULATION WEIGHTED
         st.markdown("---")
-        st.markdown("### Travel Time Distribution")
-        fig2 = px.histogram(
-            df_filtered,
+        st.markdown("### Travel Time Distribution (Population-Weighted)")
+        st.markdown("*Shows what % of the population experiences each travel time range*")
+
+        # Create bins manually with population weighting
+        bins = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
+                           df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 41)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        # Calculate population in each bin
+        bin_populations = []
+        for i in range(len(bins) - 1):
+            mask = (df_filtered['Tiempo_Viaje_Total_Minutos'] >= bins[i]) & \
+                   (df_filtered['Tiempo_Viaje_Total_Minutos'] < bins[i + 1])
+            # Sum population for unique zones in this bin (avoid double counting)
+            zones_in_bin = df_filtered[mask]['Zona_Origen'].unique()
+            pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
+            bin_populations.append(pop_in_bin / total_population * 100)
+
+        # Create bar chart
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(
+            x=bin_centers,
+            y=bin_populations,
+            marker_color='#EBEBEB',
+            width=(bins[1] - bins[0]) * 0.9,
+            showlegend=False
+        ))
+
+        travel_times_list = []
+        for _, row in df_filtered.iterrows():
+            # Add this travel time weighted by its zone's population
+            travel_times_list.extend([row['Tiempo_Viaje_Total_Minutos']] * int(row['Poblacion_Origen'] / 100))
+
+        if len(travel_times_list) > 0:
+            travel_times_weighted = np.array(travel_times_list)
+            kde = stats.gaussian_kde(travel_times_weighted)
+            x_range = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
+                                  df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 200)
+            y_kde = kde(x_range)
+            # Scale KDE to match the histogram height
+            y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
+
+            fig2.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_scaled,
+                mode='lines',
+                name='Density Curve',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+            # Calculate population percentages for each threshold using the same logic as accessibility categories
+            # This ensures consistency with the bar chart above
+            pop_under_30_pct = category_pcts.get('🟢 Excellent (<30min)', 0)
+            pop_under_45_pct = pop_under_30_pct + category_pcts.get('🟡 Good (30-45min)', 0)
+            pop_under_60_pct = pop_under_45_pct + category_pcts.get('🟠 Fair (45-60min)', 0)
+
+            fig2.add_vline(x=30, line_dash="dash", line_color="green",
+                           annotation_text=f"30 min ({pop_under_30_pct:.1f}%)",
+                           annotation_position="top")
+            fig2.add_vline(x=45, line_dash="dash", line_color="orange",
+                           annotation_text=f"45 min ({pop_under_45_pct:.1f}%)",
+                           annotation_position="top")
+            fig2.add_vline(x=60, line_dash="dash", line_color="red",
+                           annotation_text=f"60 min ({pop_under_60_pct:.1f}%)",
+                           annotation_position="top")
+
+        fig2.update_layout(
+            xaxis_title="Total Travel Time (minutes)",
+            yaxis_title="Percentage of Population (%)",
+            height=400
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+        # Travel time distribution histogram - BY ZONES
+        st.markdown("---")
+        st.markdown("### Travel Time Distribution by Zones")
+        st.markdown("*Shows what % of **zones** have their best connection within each time range*")
+
+        fig3 = px.histogram(
+            zone_best_access,
             x='Tiempo_Viaje_Total_Minutos',
             nbins=40,
             histnorm='percent',
             color_discrete_sequence=['#EBEBEB']
         )
-        travel_times = df_filtered['Tiempo_Viaje_Total_Minutos'].dropna()
-        kde = stats.gaussian_kde(travel_times)
-        x_range = np.linspace(travel_times.min(), travel_times.max(), 200)
+        travel_times_zones = zone_best_access['Tiempo_Viaje_Total_Minutos'].dropna()
+        kde = stats.gaussian_kde(travel_times_zones)
+        x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
         y_kde = kde(x_range)
         # Normalize to match histogram scale (percent)
-        y_kde_normalized = y_kde * 100 * (travel_times.max() - travel_times.min()) / 40  # 40 = nbins
+        y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40  # 40 = nbins
 
-        fig2.add_trace(go.Scatter(
+        fig3.add_trace(go.Scatter(
             x=x_range,
             y=y_kde_normalized,
             mode='lines',
@@ -232,15 +310,28 @@ if uploaded_file is not None:
             line=dict(color='#C00000', width=3),
             showlegend=False
         ))
-        fig2.add_vline(x=30, line_dash="dash", line_color="green", annotation_text="30 min")
-        fig2.add_vline(x=45, line_dash="dash", line_color="orange", annotation_text="45 min")
-        fig2.add_vline(x=60, line_dash="dash", line_color="red", annotation_text="60 min")
-        fig2.update_layout(
+
+        # Calculate percentage of ZONES at each threshold
+        total_zones = len(zone_best_access)
+        zones_under_30_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 30).sum() / total_zones * 100
+        zones_under_45_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 45).sum() / total_zones * 100
+        zones_under_60_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 60).sum() / total_zones * 100
+
+        fig3.add_vline(x=30, line_dash="dash", line_color="green",
+                       annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)",
+                       annotation_position="top")
+        fig3.add_vline(x=45, line_dash="dash", line_color="orange",
+                       annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)",
+                       annotation_position="top")
+        fig3.add_vline(x=60, line_dash="dash", line_color="red",
+                       annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)",
+                       annotation_position="top")
+        fig3.update_layout(
             xaxis_title="Total Travel Time (minutes)",
-            yaxis_title="Percentage of Connections (%)",
+            yaxis_title="Percentage of Zones (%)",
             height=400
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig3, use_container_width=True)
 
 
 
@@ -266,6 +357,8 @@ if uploaded_file is not None:
             pop_excellent = zone_data[zone_data['Tiempo_Viaje_Total_Minutos'] <= 30]['Poblacion_Origen'].sum()
             pop_good = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > 30) &
                                  (zone_data['Tiempo_Viaje_Total_Minutos'] <= 45)]['Poblacion_Origen'].sum()
+            pop_fair = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > 45) &
+                                 (zone_data['Tiempo_Viaje_Total_Minutos'] <= 60)]['Poblacion_Origen'].sum()
             pop_poor = zone_data[zone_data['Tiempo_Viaje_Total_Minutos'] > 60]['Poblacion_Origen'].sum()
 
             # Calculate population-weighted average travel time
@@ -278,6 +371,7 @@ if uploaded_file is not None:
                 'Total Population': total_pop_poi,
                 'Excellent (%)': (pop_excellent / total_pop_poi * 100) if total_pop_poi > 0 else 0,
                 'Good (%)': (pop_good / total_pop_poi * 100) if total_pop_poi > 0 else 0,
+                'Fair (%)': (pop_fair / total_pop_poi * 100) if total_pop_poi > 0 else 0,
                 'Poor (%)': (pop_poor / total_pop_poi * 100) if total_pop_poi > 0 else 0
             })
 
@@ -355,6 +449,17 @@ if uploaded_file is not None:
         ))
 
         fig6.add_trace(go.Bar(
+            name='🟠 Fair (45-60min)',
+            y=poi_df_sorted['POI'],
+            x=poi_df_sorted['Fair (%)'],
+            orientation='h',
+            marker_color='#e67e22',
+            text=poi_df_sorted['Fair (%)'].round(1),
+            textposition='inside',
+            texttemplate='%{text:.0f}%'
+        ))
+
+        fig6.add_trace(go.Bar(
             name='🔴 Poor (>60min)',
             y=poi_df_sorted['POI'],
             x=poi_df_sorted['Poor (%)'],
@@ -380,13 +485,15 @@ if uploaded_file is not None:
         # Data table
         st.markdown("#### Detailed POI Statistics")
         display_df = poi_df[
-            ['POI', 'Avg Time (weighted)', 'Total Population', 'Excellent (%)', 'Good (%)', 'Poor (%)']].copy()
+            ['POI', 'Avg Time (weighted)', 'Total Population', 'Excellent (%)', 'Good (%)', 'Fair (%)',
+             'Poor (%)']].copy()
         st.dataframe(
             display_df.style.format({
                 'Avg Time (weighted)': '{:.1f} min',
                 'Total Population': '{:,.0f}',
                 'Excellent (%)': '{:.1f}%',
                 'Good (%)': '{:.1f}%',
+                'Fair (%)': '{:.1f}%',
                 'Poor (%)': '{:.1f}%'
             }).background_gradient(subset=['Avg Time (weighted)'], cmap='RdYlGn_r'),
             hide_index=True,
