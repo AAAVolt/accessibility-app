@@ -786,7 +786,7 @@ if uploaded_file is not None:
 
                 # Show overall demand statistics
                 st.markdown("### Overall Demand Statistics")
-                col1, col2, col3 = st.columns(4)
+                col1, col2, col3 = st.columns(3)
 
 
                 with col1:
