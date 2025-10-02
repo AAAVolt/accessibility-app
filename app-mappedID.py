@@ -49,6 +49,14 @@ if zone_assignment_file:
         # Read Excel file
         assignment_df = pd.read_excel(zone_assignment_file)
 
+        st.sidebar.header("🔍 Información del Archivo")
+        st.sidebar.write(f"**Filas leídas:** {len(assignment_df)}")
+        st.sidebar.write(f"**Columnas encontradas:** {list(assignment_df.columns)}")
+
+        # Show first few rows for debugging
+        with st.sidebar.expander("👀 Primeras filas del archivo"):
+            st.dataframe(assignment_df.head())
+
         # Try to find the required columns (flexible column names)
         zone_column = None
         dest_column = None
@@ -74,18 +82,48 @@ if zone_assignment_file:
             if len(assignment_df.columns) >= 2:
                 zone_column = assignment_df.columns[0]
                 dest_column = assignment_df.columns[1]
-                st.warning(f"⚠️ Usando '{zone_column}' como ZONE_ID y '{dest_column}' como DESTINATION_ID.")
+                st.sidebar.warning(f"⚠️ Usando '{zone_column}' como ZONE_ID y '{dest_column}' como DESTINATION_ID.")
             else:
                 raise ValueError("El archivo debe tener al menos 2 columnas")
 
+        st.sidebar.write(f"**Columna zona:** {zone_column}")
+        st.sidebar.write(f"**Columna destino:** {dest_column}")
+
+        # Show data types before conversion
+        st.sidebar.write(f"**Tipo de datos zona:** {assignment_df[zone_column].dtype}")
+        st.sidebar.write(f"**Tipo de datos destino:** {dest_column}")
+
+        # Show some sample values before conversion
+        st.sidebar.write(f"**Valores zona (muestra):** {assignment_df[zone_column].head().tolist()}")
+        st.sidebar.write(f"**Valores destino (muestra):** {assignment_df[dest_column].head().tolist()}")
+
         # Clean and convert to numeric
+        original_len = len(assignment_df)
         assignment_df[zone_column] = pd.to_numeric(assignment_df[zone_column], errors='coerce')
         assignment_df[dest_column] = pd.to_numeric(assignment_df[dest_column], errors='coerce')
+
+        # Check for conversion issues
+        zone_nulls = assignment_df[zone_column].isna().sum()
+        dest_nulls = assignment_df[dest_column].isna().sum()
+
+        if zone_nulls > 0:
+            st.sidebar.warning(f"⚠️ {zone_nulls} valores de zona no pudieron convertirse a números")
+        if dest_nulls > 0:
+            st.sidebar.warning(f"⚠️ {dest_nulls} valores de destino no pudieron convertirse a números")
+
         assignment_df = assignment_df.dropna(subset=[zone_column, dest_column])
+
+        if len(assignment_df) == 0:
+            raise ValueError("No se encontraron filas válidas con valores numéricos en ambas columnas")
+
+        st.sidebar.write(f"**Filas válidas después de limpieza:** {len(assignment_df)} de {original_len}")
 
         # Create assignment dictionary
         zone_assignment_dict = dict(zip(assignment_df[zone_column].astype(int), assignment_df[dest_column].astype(int)))
         destination_ids = sorted(set(assignment_df[dest_column].astype(int)))
+
+        if len(destination_ids) == 0:
+            raise ValueError("No se encontraron IDs de destino válidos")
 
         st.sidebar.header("📋 Archivo de Asignación Zona-Destino")
         st.sidebar.success(f"✅ {len(zone_assignment_dict)} asignaciones cargadas")
@@ -103,6 +141,10 @@ if zone_assignment_file:
 
     except Exception as e:
         st.sidebar.error(f"❌ Error al cargar archivo de asignaciones: {str(e)}")
+        st.sidebar.write("**Posibles causas:**")
+        st.sidebar.write("• Las columnas no contienen valores numéricos")
+        st.sidebar.write("• El archivo está vacío o mal formateado")
+        st.sidebar.write("• Los nombres de columnas no coinciden con los esperados")
         zone_assignment_dict = None
 
 if uploaded_skim_file and zone_assignment_dict:
@@ -231,12 +273,12 @@ if uploaded_skim_file and zone_assignment_dict:
         st.subheader("🎯 Análisis de Asignación Zona-Destino")
 
         for orig_zone in sorted(normal_zones):
-            result_row = {'ZONE_ID': orig_zone}
+            result_row = {'OrigZoneNo': orig_zone}
 
             # Check if this zone has an assigned destination
             if orig_zone in zone_assignment_dict:
                 assigned_dest = zone_assignment_dict[orig_zone]
-                result_row['DESTINATION_ID'] = assigned_dest
+                result_row['Destino_ID'] = assigned_dest
 
                 # Find the travel data for this specific origin-destination pair
                 travel_data = skim_df[
@@ -248,24 +290,24 @@ if uploaded_skim_file and zone_assignment_dict:
                     # Get the first (and should be only) row
                     travel_row = travel_data.iloc[0]
 
-                    # Add selected metrics to results
+                    # Add selected metrics to results with "Mejor_" prefix
                     for metric in selected_metrics:
                         if metric in travel_row and metric in skim_df.columns:
-                            result_row[metric] = travel_row[metric]
+                            result_row[f'Mejor_{metric}'] = travel_row[metric]
                         else:
-                            result_row[metric] = np.nan
+                            result_row[f'Mejor_{metric}'] = np.nan
 
                     result_row['Data_Available'] = True
                 else:
                     # No travel data available for this O-D pair
                     for metric in selected_metrics:
-                        result_row[metric] = np.nan
+                        result_row[f'Mejor_{metric}'] = np.nan
                     result_row['Data_Available'] = False
             else:
                 # Zone has no assigned destination
-                result_row['DESTINATION_ID'] = np.nan
+                result_row['Destino_ID'] = np.nan
                 for metric in selected_metrics:
-                    result_row[metric] = np.nan
+                    result_row[f'Mejor_{metric}'] = np.nan
                 result_row['Data_Available'] = False
 
             results.append(result_row)
@@ -274,7 +316,7 @@ if uploaded_skim_file and zone_assignment_dict:
         results_df = pd.DataFrame(results)
 
         # Calculate summary statistics
-        assigned_zones = results_df['DESTINATION_ID'].notna().sum()
+        assigned_zones = results_df['Destino_ID'].notna().sum()
         zones_with_data = results_df['Data_Available'].sum()
 
         col1, col2, col3, col4 = st.columns(4)
@@ -294,8 +336,9 @@ if uploaded_skim_file and zone_assignment_dict:
 
             metric_stats = []
             for metric in selected_metrics:
-                if metric in results_df.columns:
-                    valid_data = results_df[metric].dropna()
+                colname = f'Mejor_{metric}'
+                if colname in results_df.columns:
+                    valid_data = results_df[colname].dropna()
                     if len(valid_data) > 0:
                         metric_stats.append({
                             'Métrica': metric,
@@ -333,8 +376,8 @@ if uploaded_skim_file and zone_assignment_dict:
                         break
 
                 if pop_col and zone_col:
-                    pop_df = pop_df[[zone_col, pop_col]].rename(columns={zone_col: 'ZONE_ID', pop_col: 'Population'})
-                    results_df = results_df.merge(pop_df, on='ZONE_ID', how='left')
+                    pop_df = pop_df[[zone_col, pop_col]].rename(columns={zone_col: 'OrigZoneNo', pop_col: 'Population'})
+                    results_df = results_df.merge(pop_df, on='OrigZoneNo', how='left')
                     results_df['Population'] = results_df['Population'].fillna(0).astype(int)
                     st.success(f"✅ Datos de población agregados para {len(pop_df)} zonas")
                 else:
@@ -346,11 +389,13 @@ if uploaded_skim_file and zone_assignment_dict:
         st.subheader("📋 Resultados de Asignación Zona-Destino")
 
         # Prepare display columns
-        display_columns = ['ZONE_ID', 'DESTINATION_ID']
+        display_columns = ['OrigZoneNo', 'Destino_ID']
         if 'Population' in results_df.columns:
             display_columns.append('Population')
 
-        display_columns.extend(selected_metrics)
+        # Add metric columns with "Mejor_" prefix
+        metric_columns = [f'Mejor_{metric}' for metric in selected_metrics]
+        display_columns.extend(metric_columns)
         display_columns.append('Data_Available')
 
         # Filter columns that actually exist
@@ -404,12 +449,14 @@ if uploaded_skim_file and zone_assignment_dict:
                 summary_rows = []
                 total_pop = results_df['Population'].sum()
 
-                if primary_metric in results_df.columns:
+                primary_metric_column = f'Mejor_{primary_metric}'
+
+                if primary_metric_column in results_df.columns:
                     for thr in thresholds:
                         if metric_direction.get(primary_metric, "min") == "max":
-                            accessible_mask = results_df[primary_metric] >= thr
+                            accessible_mask = results_df[primary_metric_column] >= thr
                         else:
-                            accessible_mask = results_df[primary_metric] <= thr
+                            accessible_mask = results_df[primary_metric_column] <= thr
 
                         accessible_pop = results_df.loc[accessible_mask, 'Population'].sum()
                         accessible_zones = int(accessible_mask.sum())
@@ -429,7 +476,7 @@ if uploaded_skim_file and zone_assignment_dict:
                         })
 
                     # unreachable info
-                    unreachable_mask = results_df[primary_metric].isna()
+                    unreachable_mask = results_df[primary_metric_column].isna()
                     unreachable_pop = int(results_df.loc[unreachable_mask, 'Population'].sum())
                     unreachable_zones = int(unreachable_mask.sum())
                     if unreachable_zones > 0:
@@ -465,7 +512,8 @@ if uploaded_skim_file and zone_assignment_dict:
             st.subheader("📈 Análisis Multi-Métrica")
             st.write("**Correlación entre métricas:**")
 
-            metric_data = results_df[selected_metrics].select_dtypes(include=[np.number])
+            metric_data = results_df[[f'Mejor_{metric}' for metric in selected_metrics]].select_dtypes(
+                include=[np.number])
             if not metric_data.empty:
                 correlation_matrix = metric_data.corr()
                 st.write("Matriz de correlación entre métricas de accesibilidad:")
@@ -473,8 +521,9 @@ if uploaded_skim_file and zone_assignment_dict:
 
                 with st.expander("💡 Información de Métricas"):
                     for metric in selected_metrics:
-                        if metric in results_df.columns:
-                            valid_data = results_df[metric].dropna()
+                        colname = f'Mejor_{metric}'
+                        if colname in results_df.columns:
+                            valid_data = results_df[colname].dropna()
                             if len(valid_data) > 0:
                                 st.write(f"**{metric} - {metric_descriptions.get(metric, metric)}:**")
                                 st.write(f"  • Media: {valid_data.mean():.2f}")
