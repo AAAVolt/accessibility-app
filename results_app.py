@@ -52,7 +52,7 @@ with st.expander("📋 Methodology & Data Structure", expanded=False):
     
     **Trip Necessity:**
 - `Necesita_viaje` → Whether a trip is actually needed (1 = needed, 0 = not needed)
-  - Used to filter relevant trips and measure demand patterns
+  - Used to filter relevant trips and measure need patterns
 
     ### Accessibility Categories:
     We classify connections into 4 categories based on **total travel time**:
@@ -162,7 +162,7 @@ if uploaded_file is not None:
         "📍 POI Analysis",
         "⚠️ Priority Areas",
         "📊 Distance Efficiency",
-    "🔄 Trip Demand Patterns"
+    "🔄 Trip need Patterns"
 
 
     ])
@@ -606,7 +606,7 @@ if uploaded_file is not None:
 
         # Problem matrix: POI vs Origin zones with poor access
         st.markdown("---")
-        st.markdown("#### Problem Matrix: Which high-population zones struggle to reach which POIs?")
+        st.markdown("#### Problem Matrix: Which high-population zones struggle to reach THEIR POI?")
         st.markdown("*Showing zones with highest population impact*")
 
         # Filter for problematic connections (>45 min)
@@ -763,51 +763,51 @@ if uploaded_file is not None:
             use_container_width=True
         )
 
-        # TAB 5: Trip Demand Patterns
+        # TAB 5: Trip need Patterns
         with tab5:
-            st.subheader("Trip Demand Analysis")
-            st.markdown("*Understanding which origin-destination pairs have actual travel demand*")
+            st.subheader("Trip need Analysis")
+            st.markdown("*Understanding which origin-destination pairs have actual travel NEED*")
 
             if 'Necesita_viaje' in df_all.columns:
                 # Calculate population metrics
-                # For each origin zone, check if they need ANY trip to ANY POI
-                zone_demand = df_all.groupby('Zona_Origen').agg({
-                    'Necesita_viaje': 'sum',  # How many POIs this zone needs to reach
+                # For each origin zone, check if they need a trip to their POI
+                zone_need = df_all.groupby('Zona_Origen').agg({
+                    'Necesita_viaje': 'sum',  # How many zones need to reach their POI
                     'Poblacion_Origen': 'first',
                     'Zona_Origen_nombre': 'first'
                 }).reset_index()
-                zone_demand['Has_Any_Demand'] = zone_demand['Necesita_viaje'] > 0
+                zone_need['Necesita_viaje'] = zone_need['Necesita_viaje'] > 0
 
-                # Calculate population with/without demand
-                pop_with_demand = zone_demand[zone_demand['Has_Any_Demand']]['Poblacion_Origen'].sum()
-                pop_without_demand = zone_demand[~zone_demand['Has_Any_Demand']]['Poblacion_Origen'].sum()
-                total_pop = zone_demand['Poblacion_Origen'].sum()
-                pop_with_demand_pct = (pop_with_demand / total_pop * 100) if total_pop > 0 else 0
+                # Calculate population with/without need
+                pop_with_need = zone_need[zone_need['Necesita_viaje']]['Poblacion_Origen'].sum()
+                pop_without_need = zone_need[~zone_need['Necesita_viaje']]['Poblacion_Origen'].sum()
+                total_pop = zone_need['Poblacion_Origen'].sum()
+                pop_with_need_pct = (pop_with_need / total_pop * 100) if total_pop > 0 else 0
 
-                # Show overall demand statistics
-                st.markdown("### Overall Demand Statistics")
+                # Show overall need statistics
+                st.markdown("### Overall Need Statistics")
                 col1, col2, col3 = st.columns(3)
 
 
                 with col1:
-                    zones_with_demand = zone_demand['Has_Any_Demand'].sum()
-                    total_zones = len(zone_demand)
-                    zones_demand_pct = (zones_with_demand / total_zones * 100) if total_zones > 0 else 0
-                    st.metric("Zones with Demand", f"{zones_demand_pct:.1f}%",
-                              help=f"{zones_with_demand} out of {total_zones} zones need to reach at least one POI")
+                    zones_with_need = zone_need['Necesita_viaje'].sum()
+                    total_zones = len(zone_need)
+                    zones_need_pct = (zones_with_need / total_zones * 100) if total_zones > 0 else 0
+                    st.metric("Zones with Need of Travel with BizkaiBus", f"{zones_need_pct:.1f}%",
+                              help=f"{zones_with_need} out of {total_zones} zones need to reach at least one POI")
 
                 with col2:
-                    st.metric("Population with Demand", f"{pop_with_demand_pct:.1f}%",
-                              help=f"{pop_with_demand:,.0f} out of {total_pop:,.0f} residents live in zones that need trips")
+                    st.metric("Population with Need to travel with Bizkaibus", f"{pop_with_need_pct:.1f}%",
+                              help=f"{pop_with_need:,.0f} out of {total_pop:,.0f} residents live in zones that need trips")
 
                 with col3:
-                    pois_with_demand = df_all[df_all['Necesita_viaje'] == 1]['Zona_Destino'].nunique()
+                    pois_with_need = df_all[df_all['Necesita_viaje'] == 1]['Zona_Destino'].nunique()
                     total_pois = df_all['Zona_Destino'].nunique()
-                    pois_demand_pct = (pois_with_demand / total_pois * 100) if total_pois > 0 else 0
-                    st.metric("POIs with Demand", f"{pois_demand_pct:.1f}%",
-                              help=f"{pois_with_demand} out of {total_pois} POIs have at least one origin zone that needs them")
+                    pois_need_pct = (pois_with_need / total_pois * 100) if total_pois > 0 else 0
+                    st.metric("POIs with need", f"{pois_need_pct:.1f}%",
+                              help=f"{pois_with_need} out of {total_pois} POIs have at least one origin zone that needs them")
 
-                # Population breakdown by demand
+                # Population breakdown by need
                 st.markdown("---")
                 st.markdown("### Population Distribution by Trip Necessity")
 
@@ -817,8 +817,8 @@ if uploaded_file is not None:
                     # Pie chart for population
                     pop_data = pd.DataFrame({
                         'Category': ['Residents needing trips', 'Residents not needing trips'],
-                        'Population': [pop_with_demand, pop_without_demand],
-                        'Percentage': [pop_with_demand_pct, 100 - pop_with_demand_pct]
+                        'Population': [pop_with_need, pop_without_need],
+                        'Percentage': [pop_with_need_pct, 100 - pop_with_need_pct]
                     })
 
                     fig_pop = px.pie(
@@ -845,33 +845,33 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_pop, use_container_width=True)
 
                 with col2:
-                    # Show zones with no demand
-                    zones_no_demand = zone_demand[~zone_demand['Has_Any_Demand']].sort_values('Poblacion_Origen',
+                    # Show zones with no need
+                    zones_no_need = zone_need[~zone_need['Necesita_viaje']].sort_values('Poblacion_Origen',
                                                                                               ascending=False)
 
-                    if len(zones_no_demand) > 0:
-                        st.markdown("#### Zones with No Trip Demand")
+                    if len(zones_no_need) > 0:
+                        st.markdown("#### Zones with No Trip need")
                         st.markdown(
-                            f"*{len(zones_no_demand)} zones with {pop_without_demand:,.0f} residents don't need to reach any POI*")
+                            f"*{len(zones_no_need)} zones with {pop_without_need:,.0f} residents don't need to reach any POI*")
 
-                        if len(zones_no_demand) > 10:
+                        if len(zones_no_need) > 10:
                             st.markdown("**Top 10 by population:**")
-                            display_zones = zones_no_demand.head(10)
+                            display_zones = zones_no_need.head(10)
                         else:
-                            display_zones = zones_no_demand
+                            display_zones = zones_no_need
 
                         for idx, row in display_zones.iterrows():
                             st.write(f"**{row['Zona_Origen_nombre']}**: {row['Poblacion_Origen']:,.0f} residents")
                     else:
-                        st.success("All zones have trip demand to at least one POI!")
+                        st.success("All zones have trip need to at least one POI!")
 
-                # Demand by POI - with population weighting
+                # need by POI - with population weighting
                 st.markdown("---")
-                st.markdown("### Trip Demand by Destination POI")
-                st.markdown("*Showing both trip-based and population-based demand*")
+                st.markdown("### Trip need by Destination POI")
+                st.markdown("*Showing both trip-based and population-based need*")
 
-                # Calculate both trip demand and population demand for each POI
-                poi_demand_analysis = []
+                # Calculate both trip need and population need for each POI
+                poi_need_analysis = []
 
                 for poi in df_all['Zona_Destino_nombre'].unique():
                     poi_data = df_all[df_all['Zona_Destino_nombre'] == poi]
@@ -879,80 +879,80 @@ if uploaded_file is not None:
                     # Trip-based metrics
                     trips_needed = poi_data['Necesita_viaje'].sum()
                     total_possible = len(poi_data)
-                    trip_demand_rate = (trips_needed / total_possible * 100) if total_possible > 0 else 0
+                    trip_need_rate = (trips_needed / total_possible * 100) if total_possible > 0 else 0
 
                     # Population-based metrics
                     zones_needing = poi_data[poi_data['Necesita_viaje'] == 1]['Zona_Origen'].unique()
-                    pop_needing = zone_demand[zone_demand['Zona_Origen'].isin(zones_needing)]['Poblacion_Origen'].sum()
-                    pop_demand_rate = (pop_needing / total_pop * 100) if total_pop > 0 else 0
+                    pop_needing = zone_need[zone_need['Zona_Origen'].isin(zones_needing)]['Poblacion_Origen'].sum()
+                    pop_need_rate = (pop_needing / total_pop * 100) if total_pop > 0 else 0
 
-                    poi_demand_analysis.append({
+                    poi_need_analysis.append({
                         'POI': poi,
                         'Trips_Needed': trips_needed,
                         'Total_Possible_Trips': total_possible,
-                        'Trip_Demand_Rate_%': trip_demand_rate,
+                        'Trip_need_Rate_%': trip_need_rate,
                         'Population_Needing': pop_needing,
-                        'Population_Demand_Rate_%': pop_demand_rate
+                        'Population_need_Rate_%': pop_need_rate
                     })
 
-                demand_by_poi = pd.DataFrame(poi_demand_analysis).sort_values('Population_Demand_Rate_%',
+                need_by_poi = pd.DataFrame(poi_need_analysis).sort_values('Population_need_Rate_%',
                                                                               ascending=False)
 
                 # Dual bar chart
-                fig_demand = go.Figure()
+                fig_need = go.Figure()
 
-                top_15 = demand_by_poi.head(15)
+                top_15 = need_by_poi.head(15)
 
-                fig_demand.add_trace(go.Bar(
+                fig_need.add_trace(go.Bar(
                     name='% of Trips',
                     y=top_15['POI'],
-                    x=top_15['Trip_Demand_Rate_%'],
+                    x=top_15['Trip_need_Rate_%'],
                     orientation='h',
                     marker_color='#3498db',
-                    text=top_15['Trip_Demand_Rate_%'].round(1),
+                    text=top_15['Trip_need_Rate_%'].round(1),
                     texttemplate='%{text:.1f}%',
                     textposition='inside',
-                    hovertemplate='<b>%{y}</b><br>Trip Demand: %{x:.1f}%<br>Trips Needed: %{customdata[0]:,.0f}<extra></extra>',
+                    hovertemplate='<b>%{y}</b><br>Trip need: %{x:.1f}%<br>Trips Needed: %{customdata[0]:,.0f}<extra></extra>',
                     customdata=top_15[['Trips_Needed']].values
                 ))
 
-                fig_demand.add_trace(go.Bar(
+                fig_need.add_trace(go.Bar(
                     name='% of Population',
                     y=top_15['POI'],
-                    x=top_15['Population_Demand_Rate_%'],
+                    x=top_15['Population_need_Rate_%'],
                     orientation='h',
                     marker_color='#e74c3c',
-                    text=top_15['Population_Demand_Rate_%'].round(1),
+                    text=top_15['Population_need_Rate_%'].round(1),
                     texttemplate='%{text:.1f}%',
                     textposition='inside',
-                    hovertemplate='<b>%{y}</b><br>Population Demand: %{x:.1f}%<br>Residents: %{customdata[0]:,.0f}<extra></extra>',
+                    hovertemplate='<b>%{y}</b><br>Population need: %{x:.1f}%<br>Residents: %{customdata[0]:,.0f}<extra></extra>',
                     customdata=top_15[['Population_Needing']].values
                 ))
 
-                fig_demand.update_layout(
-                    title='Top 15 POIs by Demand Rate (Trip-based vs Population-based)',
-                    xaxis_title='Demand Rate (%)',
+                fig_need.update_layout(
+                    title='Top 15 POIs by need Rate (Trip-based vs Population-based)',
+                    xaxis_title='need Rate (%)',
                     yaxis_title='Destination POI',
                     height=600,
                     yaxis={'categoryorder': 'total ascending'},
                     barmode='group',
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
-                st.plotly_chart(fig_demand, use_container_width=True)
+                st.plotly_chart(fig_need, use_container_width=True)
 
                 # Show detailed table
-                st.markdown("#### Detailed Demand Statistics")
-                display_demand = demand_by_poi[['POI', 'Trips_Needed', 'Total_Possible_Trips', 'Trip_Demand_Rate_%',
-                                                'Population_Needing', 'Population_Demand_Rate_%']].copy()
+                st.markdown("#### Detailed need Statistics")
+                display_need = need_by_poi[['POI', 'Trips_Needed', 'Total_Possible_Trips', 'Trip_need_Rate_%',
+                                                'Population_Needing', 'Population_need_Rate_%']].copy()
                 st.dataframe(
-                    display_demand.style.format({
+                    display_need.style.format({
                         'Trips_Needed': '{:,.0f}',
                         'Total_Possible_Trips': '{:,.0f}',
-                        'Trip_Demand_Rate_%': '{:.1f}%',
+                        'Trip_need_Rate_%': '{:.1f}%',
                         'Population_Needing': '{:,.0f}',
-                        'Population_Demand_Rate_%': '{:.1f}%'
-                    }).background_gradient(subset=['Trip_Demand_Rate_%'], cmap='Blues')
-                    .background_gradient(subset=['Population_Demand_Rate_%'], cmap='Reds'),
+                        'Population_need_Rate_%': '{:.1f}%'
+                    }).background_gradient(subset=['Trip_need_Rate_%'], cmap='Blues')
+                    .background_gradient(subset=['Population_need_Rate_%'], cmap='Reds'),
                     hide_index=True,
                     use_container_width=True,
                     height=400
