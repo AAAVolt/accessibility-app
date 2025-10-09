@@ -1318,7 +1318,7 @@ if uploaded_file is not None:
         zone_efficiency['Effective Speed (km/h)'] = 60 / zone_efficiency['Min per Km']
 
         # Get top 20 by population
-        top_zones_by_pop = zone_efficiency.nlargest(20, 'Population')
+        top_zones_by_pop = zone_efficiency.sort_values('Population', ascending=False)
 
         fig10 = px.bar(
             top_zones_by_pop.sort_values('Min per Km', ascending=False),
@@ -1334,7 +1334,7 @@ if uploaded_file is not None:
             }
         )
         fig10.update_layout(
-            title='Travel Time Efficiency by Zone (Top 20 by population, lower = better)',
+            title='Travel Time Efficiency by Zone (All zones by population, lower = better)',
             xaxis_title='Origin Zone',
             yaxis_title='Average Minutes per Kilometer',
             height=400
@@ -1343,7 +1343,7 @@ if uploaded_file is not None:
         st.plotly_chart(fig10, use_container_width=True)
 
         # Data table
-        st.markdown("#### Zone Efficiency Rankings (Top 20 by Population)")
+        st.markdown("#### Zone Efficiency Rankings (All Zones by Population)")
         display_efficiency = top_zones_by_pop.sort_values('Min per Km')
         st.dataframe(
             display_efficiency[['Zone Name', 'Population', 'Min per Km', 'Avg Distance (km)',

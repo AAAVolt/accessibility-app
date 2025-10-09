@@ -137,34 +137,99 @@ def get_active_lines_for_datetime(lines_data, target_date, target_hour):
     for line_code, line_data in lines_data.items():
         for period in line_data["periods"]:
             if period["start"] <= target_date <= period["end"]:
-                # Extract times based on day type
                 schedule_text = period["schedule_ida"]
 
-                # Determine which section to parse based on day type
-                if day_type == "laborable":
-                    # Extract laborables section
-                    if "Laborables:" in schedule_text:
-                        section = schedule_text.split("Laborables:")[1].split("Sábados:")[
-                            0] if "Sábados:" in schedule_text else \
-                        schedule_text.split("Laborables:")[1].split("Festivos:")[0] if "Festivos:" in schedule_text else \
-                        schedule_text.split("Laborables:")[1]
-                    else:
-                        section = schedule_text
-                elif day_type == "sabado":
-                    if "Sábados:" in schedule_text:
-                        section = schedule_text.split("Sábados:")[1].split("Festivos:")[
-                            0] if "Festivos:" in schedule_text else schedule_text.split("Sábados:")[1]
-                    else:
-                        section = ""
-                else:  # festivo
-                    if "Festivos:" in schedule_text:
-                        section = schedule_text.split("Festivos:")[1]
-                    else:
-                        section = ""
+                # Normalize encoding issues
+                schedule_text = schedule_text.replace("SÃ¡bados", "Sábados")
+                schedule_text = schedule_text.replace("sÃ¡bado", "sábado")
+
+                section = ""
+
+                # Define patterns that include each day type
+                if day_type == "sabado":
+                    patterns_to_check = [
+                        "Sábados y festivos:",
+                        "Sábados y Festivos:",
+                        "Sábados y domingos:",
+                        "Larunbat eta jaiegunetan:",
+                        "Laborables y sábados:",
+                        "Laborables y sábado:",
+                        "De lunes a sábado:",
+                        "Lunes a sábado:",
+                        "Astelehenetik larunbatera:",
+                        "Sábados:",
+                        "Larunbatetan:",
+                    ]
+
+                elif day_type == "festivo":
+                    patterns_to_check = [
+                        "Sábados y festivos:",
+                        "Sábados y Festivos:",
+                        "Domingos y festivos:",
+                        "Larunbat eta jaiegunetan:",
+                        "Festivos:",
+                        "Jaiegunetan:",
+                    ]
+
+                elif day_type == "laborable":
+                    patterns_to_check = [
+                        "De lunes a sábado:",
+                        "Lunes a sábado:",
+                        "Laborables y sábados:",
+                        "Laborables y sábado:",
+                        "Astelehenetik larunbatera:",
+                        "De lunes a viernes:",
+                        "Lunes a viernes:",
+                        "Laborables:",
+                        "Lanegunetan:",
+                        "Astelehenetik ostiralera:",
+                    ]
+
+                # Find the first matching pattern
+                found_pattern = None
+                for pattern in patterns_to_check:
+                    if pattern in schedule_text:
+                        found_pattern = pattern
+                        break
+
+                if found_pattern:
+                    # Extract section starting from the found pattern
+                    section = schedule_text.split(found_pattern)[1]
+
+                    # Define all possible end markers (other day type patterns)
+                    end_markers = [
+                        "Laborables:",
+                        "Lanegunetan:",
+                        "Sábados:",
+                        "Larunbatetan:",
+                        "Festivos:",
+                        "Jaiegunetan:",
+                        "Sábados y festivos:",
+                        "Sábados y Festivos:",
+                        "Sábados y domingos:",
+                        "Domingos y festivos:",
+                        "Larunbat eta jaiegunetan:",
+                        "Laborables y sábados:",
+                        "Laborables y sábado:",
+                        "De lunes a sábado:",
+                        "Lunes a sábado:",
+                        "De lunes a viernes:",
+                        "Lunes a viernes:",
+                        "Astelehenetik larunbatera:",
+                        "Astelehenetik ostiralera:",
+                    ]
+
+                    # Find the earliest end marker to stop at
+                    earliest_pos = len(section)
+                    for marker in end_markers:
+                        if marker != found_pattern and marker in section:
+                            pos = section.find(marker)
+                            if pos < earliest_pos:
+                                earliest_pos = pos
+
+                    section = section[:earliest_pos]
 
                 times = extract_times_from_schedule(section)
-
-                # Count buses at target hour
                 buses_at_hour = sum(1 for t in times if int(t) == target_hour)
 
                 if buses_at_hour > 0:
@@ -175,10 +240,9 @@ def get_active_lines_for_datetime(lines_data, target_date, target_hour):
                         "buses_at_hour": buses_at_hour,
                         "all_times": times
                     })
-                break  # Found active period, no need to check others
+                break
 
     return active_lines
-
 
 def create_hourly_analysis(lines_data, target_date):
     """Create hourly analysis for entire day"""
