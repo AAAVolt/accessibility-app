@@ -803,12 +803,13 @@ if uploaded_file is not None:
         st.metric("Total POIs", f"{total_pois}")
 
     # Create tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🎯 Accessibility Overview",
         "📍 POI Analysis",
         "⚠️ Priority Areas",
         "📊 Distance Efficiency",
-        "🔄 Trip need Patterns"
+        "🔄 Trip need Patterns",
+        "🗺️ Geographic Analysis"
     ])
 
     # TAB 1: Accessibility Overview
@@ -1549,6 +1550,289 @@ if uploaded_file is not None:
             )
         else:
             st.warning("⚠️ 'Necesita_viaje' column not found in the dataset")
+
+    # TAB 6: Geographic Analysis
+    with tab6:
+        st.subheader("Geographic Analysis by Municipality & Comarca")
+        st.markdown("*Accessibility patterns across municipalities and comarcas*")
+
+        # Check if columns exist
+        if 'Municipio' not in df_filtered.columns or 'Comarca' not in df_filtered.columns:
+            st.warning("⚠️ 'Municipio' or 'Comarca' columns not found in the dataset")
+        else:
+            # MUNICIPALITY ANALYSIS
+            st.markdown("### Analysis by Municipality")
+
+            muni_analysis = df_filtered.groupby('Municipio').agg({
+                'Poblacion_Origen': 'sum',
+                'Tiempo_Viaje_Total_Minutos': 'mean',
+                'Numero_Transbordos': 'mean',
+                'Zona_Origen': 'nunique'
+            }).reset_index()
+            muni_analysis.columns = ['Municipality', 'Total Population', 'Avg Travel Time', 'Avg Transfers', 'Zones']
+
+            # Add accessibility category percentages per municipality
+            for muni in df_filtered['Municipio'].unique():
+                muni_data = df_filtered[df_filtered['Municipio'] == muni]
+                zone_best = muni_data.groupby('Zona_Origen').agg({
+                    'Tiempo_Viaje_Total_Minutos': 'min',
+                    'Poblacion_Origen': 'first'
+                }).reset_index()
+
+                total_pop_muni = zone_best['Poblacion_Origen'].sum()
+
+                if total_pop_muni > 0:
+                    excellent = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] <= 30][
+                                    'Poblacion_Origen'].sum() / total_pop_muni * 100
+                    good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) & (
+                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
+                               'Poblacion_Origen'].sum() / total_pop_muni * 100
+                    fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) & (
+                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
+                               'Poblacion_Origen'].sum() / total_pop_muni * 100
+                    poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 60][
+                               'Poblacion_Origen'].sum() / total_pop_muni * 100
+                else:
+                    excellent = good = fair = poor = 0
+
+                muni_analysis.loc[muni_analysis['Municipality'] == muni, 'Excellent (%)'] = excellent
+                muni_analysis.loc[muni_analysis['Municipality'] == muni, 'Good (%)'] = good
+                muni_analysis.loc[muni_analysis['Municipality'] == muni, 'Fair (%)'] = fair
+                muni_analysis.loc[muni_analysis['Municipality'] == muni, 'Poor (%)'] = poor
+
+            muni_analysis = muni_analysis.sort_values('Avg Travel Time', ascending=False)
+
+            # Municipality charts
+            col1, col2 = st.columns(2)
+
+            with col1:
+                fig_muni_time = px.bar(
+                    muni_analysis.head(15),
+                    x='Avg Travel Time',
+                    y='Municipality',
+                    orientation='h',
+                    color='Total Population',
+                    color_continuous_scale='Blues',
+                    text='Avg Travel Time',
+                    title="Top 15 Municipalities by Average Travel Time"
+                )
+                fig_muni_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+                fig_muni_time.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+                st.plotly_chart(fig_muni_time, use_container_width=True)
+
+            with col2:
+                # Stacked bar for accessibility categories
+                fig_muni_access = go.Figure()
+
+                top_15_muni = muni_analysis.sort_values('Total Population', ascending=False).head(15)
+
+                fig_muni_access.add_trace(go.Bar(
+                    name='🟢 Excellent',
+                    y=top_15_muni['Municipality'],
+                    x=top_15_muni['Excellent (%)'],
+                    orientation='h',
+                    marker_color='#2ecc71',
+                    text=top_15_muni['Excellent (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_muni_access.add_trace(go.Bar(
+                    name='🟡 Good',
+                    y=top_15_muni['Municipality'],
+                    x=top_15_muni['Good (%)'],
+                    orientation='h',
+                    marker_color='#f1c40f',
+                    text=top_15_muni['Good (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_muni_access.add_trace(go.Bar(
+                    name='🟠 Fair',
+                    y=top_15_muni['Municipality'],
+                    x=top_15_muni['Fair (%)'],
+                    orientation='h',
+                    marker_color='#e67e22',
+                    text=top_15_muni['Fair (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_muni_access.add_trace(go.Bar(
+                    name='🔴 Poor',
+                    y=top_15_muni['Municipality'],
+                    x=top_15_muni['Poor (%)'],
+                    orientation='h',
+                    marker_color='#e74c3c',
+                    text=top_15_muni['Poor (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+
+                fig_muni_access.update_layout(
+                    barmode='stack',
+                    title='Top 15 Municipalities by Population - Accessibility Distribution',
+                    xaxis_title='% of Population',
+                    yaxis_title='Municipality',
+                    height=500,
+                    yaxis={'categoryorder': 'total ascending'}
+                )
+                st.plotly_chart(fig_muni_access, use_container_width=True)
+
+            # Municipality table
+            st.markdown("#### Detailed Municipality Statistics")
+            st.dataframe(
+                muni_analysis.style.format({
+                    'Total Population': '{:,.0f}',
+                    'Avg Travel Time': '{:.1f} min',
+                    'Avg Transfers': '{:.2f}',
+                    'Zones': '{:.0f}',
+                    'Excellent (%)': '{:.1f}%',
+                    'Good (%)': '{:.1f}%',
+                    'Fair (%)': '{:.1f}%',
+                    'Poor (%)': '{:.1f}%'
+                }).background_gradient(subset=['Avg Travel Time'], cmap='RdYlGn_r'),
+                hide_index=True,
+                use_container_width=True,
+                height=400
+            )
+
+            # COMARCA ANALYSIS
+            st.markdown("---")
+            st.markdown("### Analysis by Comarca")
+
+            comarca_analysis = df_filtered.groupby('Comarca').agg({
+                'Poblacion_Origen': 'sum',
+                'Tiempo_Viaje_Total_Minutos': 'mean',
+                'Numero_Transbordos': 'mean',
+                'Zona_Origen': 'nunique',
+                'Municipio': 'nunique'
+            }).reset_index()
+            comarca_analysis.columns = ['Comarca', 'Total Population', 'Avg Travel Time', 'Avg Transfers', 'Zones',
+                                        'Municipalities']
+
+            # Add accessibility category percentages per comarca
+            for comarca in df_filtered['Comarca'].unique():
+                comarca_data = df_filtered[df_filtered['Comarca'] == comarca]
+                zone_best = comarca_data.groupby('Zona_Origen').agg({
+                    'Tiempo_Viaje_Total_Minutos': 'min',
+                    'Poblacion_Origen': 'first'
+                }).reset_index()
+
+                total_pop_comarca = zone_best['Poblacion_Origen'].sum()
+
+                if total_pop_comarca > 0:
+                    excellent = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] <= 30][
+                                    'Poblacion_Origen'].sum() / total_pop_comarca * 100
+                    good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) & (
+                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
+                               'Poblacion_Origen'].sum() / total_pop_comarca * 100
+                    fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) & (
+                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
+                               'Poblacion_Origen'].sum() / total_pop_comarca * 100
+                    poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 60][
+                               'Poblacion_Origen'].sum() / total_pop_comarca * 100
+                else:
+                    excellent = good = fair = poor = 0
+
+                comarca_analysis.loc[comarca_analysis['Comarca'] == comarca, 'Excellent (%)'] = excellent
+                comarca_analysis.loc[comarca_analysis['Comarca'] == comarca, 'Good (%)'] = good
+                comarca_analysis.loc[comarca_analysis['Comarca'] == comarca, 'Fair (%)'] = fair
+                comarca_analysis.loc[comarca_analysis['Comarca'] == comarca, 'Poor (%)'] = poor
+
+            comarca_analysis = comarca_analysis.sort_values('Avg Travel Time', ascending=False)
+
+            # Comarca charts
+            col1, col2 = st.columns(2)
+
+            with col1:
+                fig_comarca_time = px.bar(
+                    comarca_analysis,
+                    x='Avg Travel Time',
+                    y='Comarca',
+                    orientation='h',
+                    color='Total Population',
+                    color_continuous_scale='Reds',
+                    text='Avg Travel Time',
+                    title="Comarcas by Average Travel Time"
+                )
+                fig_comarca_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+                fig_comarca_time.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+                st.plotly_chart(fig_comarca_time, use_container_width=True)
+
+            with col2:
+                # Stacked bar for comarca accessibility
+                fig_comarca_access = go.Figure()
+
+                comarca_sorted = comarca_analysis.sort_values('Total Population', ascending=False)
+
+                fig_comarca_access.add_trace(go.Bar(
+                    name='🟢 Excellent',
+                    y=comarca_sorted['Comarca'],
+                    x=comarca_sorted['Excellent (%)'],
+                    orientation='h',
+                    marker_color='#2ecc71',
+                    text=comarca_sorted['Excellent (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_comarca_access.add_trace(go.Bar(
+                    name='🟡 Good',
+                    y=comarca_sorted['Comarca'],
+                    x=comarca_sorted['Good (%)'],
+                    orientation='h',
+                    marker_color='#f1c40f',
+                    text=comarca_sorted['Good (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_comarca_access.add_trace(go.Bar(
+                    name='🟠 Fair',
+                    y=comarca_sorted['Comarca'],
+                    x=comarca_sorted['Fair (%)'],
+                    orientation='h',
+                    marker_color='#e67e22',
+                    text=comarca_sorted['Fair (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+                fig_comarca_access.add_trace(go.Bar(
+                    name='🔴 Poor',
+                    y=comarca_sorted['Comarca'],
+                    x=comarca_sorted['Poor (%)'],
+                    orientation='h',
+                    marker_color='#e74c3c',
+                    text=comarca_sorted['Poor (%)'].round(1),
+                    textposition='inside',
+                    texttemplate='%{text:.0f}%'
+                ))
+
+                fig_comarca_access.update_layout(
+                    barmode='stack',
+                    title='Comarcas by Population - Accessibility Distribution',
+                    xaxis_title='% of Population',
+                    yaxis_title='Comarca',
+                    height=400,
+                    yaxis={'categoryorder': 'total ascending'}
+                )
+                st.plotly_chart(fig_comarca_access, use_container_width=True)
+
+            # Comarca table
+            st.markdown("#### Detailed Comarca Statistics")
+            st.dataframe(
+                comarca_analysis.style.format({
+                    'Total Population': '{:,.0f}',
+                    'Avg Travel Time': '{:.1f} min',
+                    'Avg Transfers': '{:.2f}',
+                    'Zones': '{:.0f}',
+                    'Municipalities': '{:.0f}',
+                    'Excellent (%)': '{:.1f}%',
+                    'Good (%)': '{:.1f}%',
+                    'Fair (%)': '{:.1f}%',
+                    'Poor (%)': '{:.1f}%'
+                }).background_gradient(subset=['Avg Travel Time'], cmap='RdYlGn_r'),
+                hide_index=True,
+                use_container_width=True,
+                height=300
+            )
 
     # ========================================================================
     # DOWNLOAD SECTION - AFTER ALL DATA IS COMPUTED
