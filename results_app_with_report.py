@@ -163,302 +163,6 @@ def create_all_charts(df_filtered, zone_populations, total_population, poi_df, p
         text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)],
         title="Distribution of Population by Best Accessibility to Any POI"
     )
-    fig1.update_traces(textposition='outside', textfont_size=10)
-    fig1.update_layout(
-        xaxis_title="Accessibility Category",
-        yaxis_title="Population (residents)",
-        showlegend=False,
-        height=500,
-        width=1200,
-        font=dict(size=10),
-        xaxis=dict(tickfont=dict(size=9)),
-        yaxis=dict(tickfont=dict(size=9))
-    )
-    charts['01_population_accessibility_bar.png'] = pio.to_image(fig1, format='png', width=1200, height=500)
-
-    # CHART 2: Travel Time Distribution (Population-Weighted)
-    bins = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
-                       df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 41)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-
-    bin_populations = []
-    for i in range(len(bins) - 1):
-        mask = (df_filtered['Tiempo_Viaje_Total_Minutos'] >= bins[i]) & \
-               (df_filtered['Tiempo_Viaje_Total_Minutos'] < bins[i + 1])
-        zones_in_bin = df_filtered[mask]['Zona_Origen'].unique()
-        pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
-        bin_populations.append(pop_in_bin / total_population * 100)
-
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        x=bin_centers,
-        y=bin_populations,
-        marker_color='#EBEBEB',
-        width=(bins[1] - bins[0]) * 0.9,
-        showlegend=False
-    ))
-
-    travel_times_list = []
-    for _, row in df_filtered.iterrows():
-        travel_times_list.extend([row['Tiempo_Viaje_Total_Minutos']] * int(row['Poblacion_Origen'] / 100))
-
-    if len(travel_times_list) > 0:
-        travel_times_weighted = np.array(travel_times_list)
-        kde = stats.gaussian_kde(travel_times_weighted)
-        x_range = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
-                              df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 200)
-        y_kde = kde(x_range)
-        y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
-
-        fig2.add_trace(go.Scatter(
-            x=x_range,
-            y=y_kde_scaled,
-            mode='lines',
-            line=dict(color='#C00000', width=3),
-            showlegend=False
-        ))
-
-        pop_under_30_pct = category_pcts.get('🟢 Excellent (<30min)', 0)
-        pop_under_45_pct = pop_under_30_pct + category_pcts.get('🟡 Good (30-45min)', 0)
-        pop_under_60_pct = pop_under_45_pct + category_pcts.get('🟠 Fair (45-60min)', 0)
-
-        fig2.add_vline(x=30, line_dash="dash", line_color="green",
-                       annotation_text=f"30 min ({pop_under_30_pct:.1f}%)", annotation_font_size=9)
-        fig2.add_vline(x=45, line_dash="dash", line_color="orange",
-                       annotation_text=f"45 min ({pop_under_45_pct:.1f}%)", annotation_font_size=9)
-        fig2.add_vline(x=60, line_dash="dash", line_color="red",
-                       annotation_text=f"60 min ({pop_under_60_pct:.1f}%)", annotation_font_size=9)
-
-    fig2.update_layout(
-        title="Travel Time Distribution (Population-Weighted)",
-        xaxis_title="Total Travel Time (minutes)",
-        yaxis_title="Percentage of Population (%)",
-        height=400,
-        width=1200,
-        font=dict(size=10),
-        xaxis=dict(tickfont=dict(size=9)),
-        yaxis=dict(tickfont=dict(size=9))
-    )
-    charts['02_travel_time_population_weighted.png'] = pio.to_image(fig2, format='png', width=1200, height=400)
-
-    # CHART 3: Travel Time Distribution by Zones
-    fig3 = px.histogram(
-        zone_best_access,
-        x='Tiempo_Viaje_Total_Minutos',
-        nbins=40,
-        histnorm='percent',
-        color_discrete_sequence=['#EBEBEB'],
-        title="Travel Time Distribution by Zones"
-    )
-
-    travel_times_zones = zone_best_access['Tiempo_Viaje_Total_Minutos'].dropna()
-    kde = stats.gaussian_kde(travel_times_zones)
-    x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
-    y_kde = kde(x_range)
-    y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40
-
-    fig3.add_trace(go.Scatter(
-        x=x_range,
-        y=y_kde_normalized,
-        mode='lines',
-        line=dict(color='#C00000', width=3),
-        showlegend=False
-    ))
-
-    total_zones = len(zone_best_access)
-    zones_under_30_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 30).sum() / total_zones * 100
-    zones_under_45_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 45).sum() / total_zones * 100
-    zones_under_60_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 60).sum() / total_zones * 100
-
-    fig3.add_vline(x=30, line_dash="dash", line_color="green",
-                   annotation_text=f"30 min ({zones_under_30_pct:.1f}%)", annotation_font_size=9)
-    fig3.add_vline(x=45, line_dash="dash", line_color="orange",
-                   annotation_text=f"45 min ({zones_under_45_pct:.1f}%)", annotation_font_size=9)
-    fig3.add_vline(x=60, line_dash="dash", line_color="red",
-                   annotation_text=f"60 min ({zones_under_60_pct:.1f}%)", annotation_font_size=9)
-
-    fig3.update_layout(
-        xaxis_title="Total Travel Time (minutes)",
-        yaxis_title="Percentage of Zones (%)",
-        height=400,
-        width=1200,
-        font=dict(size=10),
-        xaxis=dict(tickfont=dict(size=9)),
-        yaxis=dict(tickfont=dict(size=9))
-    )
-    charts['03_travel_time_by_zones.png'] = pio.to_image(fig3, format='png', width=1200, height=400)
-
-    # CHART 4: Best Connected POIs
-    best_pois = poi_df.head(5)
-    fig4 = px.bar(
-        best_pois,
-        x='Avg Time (weighted)',
-        y='POI',
-        orientation='h',
-        color='Excellent (%)',
-        color_continuous_scale='Greens',
-        text='Avg Time (weighted)',
-        title="Best Connected POIs"
-    )
-    fig4.update_traces(texttemplate='%{text:.1f} min', textposition='outside', textfont_size=9)
-    fig4.update_layout(
-        height=300,
-        yaxis={'categoryorder': 'total ascending'},
-        width=1200,
-        font=dict(size=10),
-        xaxis=dict(tickfont=dict(size=9))
-    )
-    charts['04_best_connected_pois.png'] = pio.to_image(fig4, format='png', width=1200, height=300)
-
-    # CHART 5: Worst Connected POIs
-    worst_pois = poi_df.tail(5)
-    fig5 = px.bar(
-        worst_pois,
-        x='Avg Time (weighted)',
-        y='POI',
-        orientation='h',
-        color='Poor (%)',
-        color_continuous_scale='Reds',
-        text='Avg Time (weighted)',
-        title="Worst Connected POIs"
-    )
-    fig5.update_traces(texttemplate='%{text:.1f} min', textposition='outside', textfont_size=9)
-    fig5.update_layout(
-        height=300,
-        yaxis={'categoryorder': 'total descending'},
-        width=1200,
-        font=dict(size=10),
-        xaxis=dict(tickfont=dict(size=9))
-    )
-    charts['05_worst_connected_pois.png'] = pio.to_image(fig5, format='png', width=1200, height=300)
-
-    # CHART 6: POI Accessibility Breakdown
-    poi_df_sorted = poi_df.sort_values('Avg Time (weighted)')
-
-    fig6 = go.Figure()
-    fig6.add_trace(go.Bar(
-        name='🟢 Excellent (<30min)',
-        y=poi_df_sorted['POI'],
-        x=poi_df_sorted['Excellent (%)'],
-        orientation='h',
-        marker_color='#2ecc71',
-        text=poi_df_sorted['Excellent (%)'].round(1),
-        textposition='inside',
-        texttemplate='%{text:.0f}%',
-        textfont_size=8
-    ))
-    fig6.add_trace(go.Bar(
-        name='🟡 Good (30-45min)',
-        y=poi_df_sorted['POI'],
-        x=poi_df_sorted['Good (%)'],
-        orientation='h',
-        marker_color='#f1c40f',
-        text=poi_df_sorted['Good (%)'].round(1),
-        textposition='inside',
-        texttemplate='%{text:.0f}%',
-        textfont_size=8
-    ))
-    fig6.add_trace(go.Bar(
-        name='🟠 Fair (45-60min)',
-        y=poi_df_sorted['POI'],
-        x=poi_df_sorted['Fair (%)'],
-        orientation='h',
-        marker_color='#e67e22',
-        text=poi_df_sorted['Fair (%)'].round(1),
-        textposition='inside',
-        texttemplate='%{text:.0f}%',
-        textfont_size=8
-    ))
-    fig6.add_trace(go.Bar(
-        name='🔴 Poor (>60min)',
-        y=poi_df_sorted['POI'],
-        x=poi_df_sorted['Poor (%)'],
-        orientation='h',
-        marker_color='#e74c3c',
-        text=poi_df_sorted['Poor (%)'].round(1),
-        textposition='inside',
-        texttemplate='%{text:.0f}%',
-        textfont_size=8
-    ))
-    fig6.update_layout(
-        barmode='stack',
-        title='POI Accessibility Quality Distribution (Population-Weighted)',
-        xaxis_title='Percentage of Population (%)',
-        yaxis_title='Destination POI',
-        height=max(400, len(poi_df) * 25),
-        width=1200,
-        font=dict(size=9),
-        xaxis=dict(tickfont=dict(size=8)),
-        yaxis=dict(tickfont=dict(size=8)),
-        legend=dict(font=dict(size=8))
-    )
-    charts['06_poi_accessibility_breakdown.png'] = pio.to_image(fig6, format='png', width=1200,
-                                                                height=max(400, len(poi_df) * 25))
-
-    # CHART 7: Priority Zones (if any exist)
-    if len(poor_zones) > 0:
-        top_poor = poor_zones.head(15)
-        fig7 = px.bar(
-            top_poor,
-            x='Population',
-            y='Zone Name',
-            orientation='h',
-            color='Avg Travel Time',
-            color_continuous_scale='Reds',
-            hover_data=['Avg Transfers', 'POIs Served'],
-            text='Population',
-            title="High-Population Zones with Worst Accessibility"
-        )
-        fig7.update_traces(texttemplate='%{text:,.0f}', textposition='outside', textfont_size=9)
-        fig7.update_layout(
-            height=500,
-            yaxis={'categoryorder': 'total ascending'},
-            xaxis_title='Population (residents)',
-            yaxis_title='Origin Zone',
-            width=1200,
-            font=dict(size=10),
-            xaxis=dict(tickfont=dict(size=9)),
-        )
-        charts['07_priority_zones.png'] = pio.to_image(fig7, format='png', width=1200, height=500)
-
-    return charts
-    """Generate all chart images and return as dictionary"""
-    charts = {}
-
-    # Calculate common data needed for multiple charts
-    zone_best_access = df_filtered.groupby('Zona_Origen').agg({
-        'Tiempo_Viaje_Total_Minutos': 'min',
-        'Poblacion_Origen': 'first'
-    }).reset_index()
-
-    zone_best_access['Best_Category'] = pd.cut(
-        zone_best_access['Tiempo_Viaje_Total_Minutos'],
-        bins=[0, 30, 45, 60, float('inf')],
-        labels=['🟢 Excellent (<30min)', '🟡 Good (30-45min)',
-                '🟠 Fair (45-60min)', '🔴 Poor (>60min)']
-    )
-
-    pop_by_category = zone_best_access.groupby('Best_Category')['Poblacion_Origen'].sum()
-    category_pcts = (pop_by_category / total_population * 100) if total_population > 0 else pd.Series()
-
-    categories = ['🟢 Excellent (<30min)', '🟡 Good (30-45min)', '🟠 Fair (45-60min)', '🔴 Poor (>60min)']
-    populations = [pop_by_category.get(cat, 0) for cat in categories]
-    percentages = [category_pcts.get(cat, 0) for cat in categories]
-
-    # CHART 1: Population by Accessibility Category
-    fig1 = px.bar(
-        x=categories,
-        y=populations,
-        color=categories,
-        color_discrete_map={
-            '🟢 Excellent (<30min)': '#2ecc71',
-            '🟡 Good (30-45min)': '#f1c40f',
-            '🟠 Fair (45-60min)': '#e67e22',
-            '🔴 Poor (>60min)': '#e74c3c'
-        },
-        text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)],
-        title="Distribution of Population by Best Accessibility to Any POI"
-    )
     fig1.update_traces(textposition='outside')
     fig1.update_layout(xaxis_title="Accessibility Category", yaxis_title="Population (residents)",
                        showlegend=False, height=500, width=1200)
@@ -518,7 +222,6 @@ def create_all_charts(df_filtered, zone_populations, total_population, poi_df, p
                        annotation_text=f"60 min ({pop_under_60_pct:.1f}%)")
 
     fig2.update_layout(
-        title="Travel Time Distribution (Population-Weighted)",
         xaxis_title="Total Travel Time (minutes)",
         yaxis_title="Percentage of Population (%)",
         height=400, width=1200
@@ -682,6 +385,38 @@ def create_all_charts(df_filtered, zone_populations, total_population, poi_df, p
     return charts
 
 
+def apply_standard_chart_styling(fig, title_text, x_title, y_title, height=500, width=1400):
+    """Apply consistent styling to all charts"""
+    fig.update_layout(
+        title=dict(
+            text=title_text,
+            font=dict(size=24)
+        ),
+        xaxis=dict(
+            title=dict(
+                text=x_title,
+                font=dict(size=18)
+            ),
+            tickfont=dict(size=16)
+        ),
+        yaxis=dict(
+            title=dict(
+                text=y_title,
+                font=dict(size=18)
+            ),
+            tickfont=dict(size=16)
+        ),
+        legend=dict(
+            font=dict(size=16)
+        ),
+        height=height,
+        width=width,
+        margin=dict(l=200, r=100, t=100, b=80),
+        font=dict(size=14)
+    )
+    return fig
+
+
 # ============================================================================
 # MAIN APP
 # ============================================================================
@@ -839,151 +574,149 @@ if uploaded_file is not None:
         pop_by_category = zone_best_access.groupby('Best_Category')['Poblacion_Origen'].sum()
         category_pcts = (pop_by_category / total_population * 100) if total_population > 0 else pd.Series()
 
-        col1, col2 = st.columns([2, 1])
+        categories = ['🟢 Excellent (<30min)', '🟡 Good (30-45min)', '🟠 Fair (45-60min)', '🔴 Poor (>60min)']
+        populations = [pop_by_category.get(cat, 0) for cat in categories]
+        percentages = [category_pcts.get(cat, 0) for cat in categories]
 
-        with col1:
-            categories = ['🟢 Excellent (<30min)', '🟡 Good (30-45min)', '🟠 Fair (45-60min)', '🔴 Poor (>60min)']
-            populations = [pop_by_category.get(cat, 0) for cat in categories]
-            percentages = [category_pcts.get(cat, 0) for cat in categories]
-
-            fig1 = px.bar(
-                x=categories,
-                y=populations,
-                color=categories,
-                color_discrete_map={
-                    '🟢 Excellent (<30min)': '#2ecc71',
-                    '🟡 Good (30-45min)': '#f1c40f',
-                    '🟠 Fair (45-60min)': '#e67e22',
-                    '🔴 Poor (>60min)': '#e74c3c'
-                },
-                text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)]
-            )
-            fig1.update_layout(
-                title="Distribution of Population by Best Accessibility to Any POI",
-                xaxis_title="Accessibility Category",
-                yaxis_title="Population (residents)",
-                showlegend=False,
-                height=500
-            )
-            fig1.update_traces(textposition='outside')
-            st.plotly_chart(fig1, use_container_width=True)
-
-        with col2:
-            st.markdown("### Summary")
-            for cat, pop, pct in zip(categories, populations, percentages):
-                if '🟢' in cat or '🟡' in cat:
-                    st.success(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
-                elif '🟠' in cat:
-                    st.warning(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
-                else:
-                    st.error(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
-
-        # Travel time distributions
-        st.markdown("---")
-        st.markdown("### Travel Time Distribution (Population-Weighted)")
-
-        bins = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
-                           df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 41)
-        bin_centers = (bins[:-1] + bins[1:]) / 2
-
-        bin_populations = []
-        for i in range(len(bins) - 1):
-            mask = (df_filtered['Tiempo_Viaje_Total_Minutos'] >= bins[i]) & \
-                   (df_filtered['Tiempo_Viaje_Total_Minutos'] < bins[i + 1])
-            zones_in_bin = df_filtered[mask]['Zona_Origen'].unique()
-            pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
-            bin_populations.append(pop_in_bin / total_population * 100)
-
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(
-            x=bin_centers,
-            y=bin_populations,
-            marker_color='#EBEBEB',
-            width=(bins[1] - bins[0]) * 0.9,
-            showlegend=False
-        ))
-
-        travel_times_list = []
-        for _, row in df_filtered.iterrows():
-            travel_times_list.extend([row['Tiempo_Viaje_Total_Minutos']] * int(row['Poblacion_Origen'] / 100))
-
-        if len(travel_times_list) > 0:
-            travel_times_weighted = np.array(travel_times_list)
-            kde = stats.gaussian_kde(travel_times_weighted)
-            x_range = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
-                                  df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 200)
-            y_kde = kde(x_range)
-            y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
-
-            fig2.add_trace(go.Scatter(
-                x=x_range,
-                y=y_kde_scaled,
-                mode='lines',
-                line=dict(color='#C00000', width=3),
-                showlegend=False
-            ))
-
-            pop_under_30_pct = category_pcts.get('🟢 Excellent (<30min)', 0)
-            pop_under_45_pct = pop_under_30_pct + category_pcts.get('🟡 Good (30-45min)', 0)
-            pop_under_60_pct = pop_under_45_pct + category_pcts.get('🟠 Fair (45-60min)', 0)
-
-            fig2.add_vline(x=30, line_dash="dash", line_color="green",
-                           annotation_text=f"30 min ({pop_under_30_pct:.1f}%)")
-            fig2.add_vline(x=45, line_dash="dash", line_color="orange",
-                           annotation_text=f"45 min ({pop_under_45_pct:.1f}%)")
-            fig2.add_vline(x=60, line_dash="dash", line_color="red",
-                           annotation_text=f"60 min ({pop_under_60_pct:.1f}%)")
-
-        fig2.update_layout(
-            xaxis_title="Total Travel Time (minutes)",
-            yaxis_title="Percentage of Population (%)",
-            height=400
+        fig1 = px.bar(
+            x=categories,
+            y=populations,
+            color=categories,
+            color_discrete_map={
+                '🟢 Excellent (<30min)': '#2ecc71',
+                '🟡 Good (30-45min)': '#f1c40f',
+                '🟠 Fair (45-60min)': '#e67e22',
+                '🔴 Poor (>60min)': '#e74c3c'
+            },
+            text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)]
         )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("### Travel Time Distribution by Zones")
-
-        fig3 = px.histogram(
-            zone_best_access,
-            x='Tiempo_Viaje_Total_Minutos',
-            nbins=40,
-            histnorm='percent',
-            color_discrete_sequence=['#EBEBEB']
+        fig1 = apply_standard_chart_styling(
+            fig1,
+            "Distribution of Population by Best Accessibility to Any POI",
+            "Accessibility Category",
+            "Population (residents)",
         )
+        fig1.update_layout(showlegend=False)
+        fig1.update_traces(textposition='outside')
+        st.plotly_chart(fig1, use_container_width=True)
 
-        travel_times_zones = zone_best_access['Tiempo_Viaje_Total_Minutos'].dropna()
-        kde = stats.gaussian_kde(travel_times_zones)
-        x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
+        st.markdown("### Summary")
+        for cat, pop, pct in zip(categories, populations, percentages):
+            if '🟢' in cat or '🟡' in cat:
+                st.success(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+            elif '🟠' in cat:
+                st.warning(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+            else:
+                st.error(f"**{cat}**\n\n{pop:,.0f} residents ({pct:.1f}%)")
+
+    # Travel time distributions
+    st.markdown("---")
+    st.markdown("### Travel Time Distribution (Population-Weighted)")
+
+    bins = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
+                       df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 41)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+
+    bin_populations = []
+    for i in range(len(bins) - 1):
+        mask = (df_filtered['Tiempo_Viaje_Total_Minutos'] >= bins[i]) & \
+               (df_filtered['Tiempo_Viaje_Total_Minutos'] < bins[i + 1])
+        zones_in_bin = df_filtered[mask]['Zona_Origen'].unique()
+        pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
+        bin_populations.append(pop_in_bin / total_population * 100)
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        x=bin_centers,
+        y=bin_populations,
+        marker_color='#EBEBEB',
+        width=(bins[1] - bins[0]) * 0.9,
+        showlegend=False
+    ))
+
+    travel_times_list = []
+    for _, row in df_filtered.iterrows():
+        travel_times_list.extend([row['Tiempo_Viaje_Total_Minutos']] * int(row['Poblacion_Origen'] / 100))
+
+    if len(travel_times_list) > 0:
+        travel_times_weighted = np.array(travel_times_list)
+        kde = stats.gaussian_kde(travel_times_weighted)
+        x_range = np.linspace(df_filtered['Tiempo_Viaje_Total_Minutos'].min(),
+                              df_filtered['Tiempo_Viaje_Total_Minutos'].max(), 200)
         y_kde = kde(x_range)
-        y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40
+        y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
 
-        fig3.add_trace(go.Scatter(
+        fig2.add_trace(go.Scatter(
             x=x_range,
-            y=y_kde_normalized,
+            y=y_kde_scaled,
             mode='lines',
             line=dict(color='#C00000', width=3),
             showlegend=False
         ))
 
-        total_zones = len(zone_best_access)
-        zones_under_30_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 30).sum() / total_zones * 100
-        zones_under_45_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 45).sum() / total_zones * 100
-        zones_under_60_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 60).sum() / total_zones * 100
+        pop_under_30_pct = category_pcts.get('🟢 Excellent (<30min)', 0)
+        pop_under_45_pct = pop_under_30_pct + category_pcts.get('🟡 Good (30-45min)', 0)
+        pop_under_60_pct = pop_under_45_pct + category_pcts.get('🟠 Fair (45-60min)', 0)
 
-        fig3.add_vline(x=30, line_dash="dash", line_color="green",
-                       annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)")
-        fig3.add_vline(x=45, line_dash="dash", line_color="orange",
-                       annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)")
-        fig3.add_vline(x=60, line_dash="dash", line_color="red",
-                       annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)")
+        fig2.add_vline(x=30, line_dash="dash", line_color="green",
+                       annotation_text=f"30 min ({pop_under_30_pct:.1f}%)")
+        fig2.add_vline(x=45, line_dash="dash", line_color="orange",
+                       annotation_text=f"45 min ({pop_under_45_pct:.1f}%)")
+        fig2.add_vline(x=60, line_dash="dash", line_color="red",
+                       annotation_text=f"60 min ({pop_under_60_pct:.1f}%)")
 
-        fig3.update_layout(
-            xaxis_title="Total Travel Time (minutes)",
-            yaxis_title="Percentage of Zones (%)",
-            height=400
-        )
-        st.plotly_chart(fig3, use_container_width=True)
+    fig2 = apply_standard_chart_styling(
+        fig2,
+        "Travel Time Distribution (Population-Weighted)",
+        "Total Travel Time (minutes)",
+        "Percentage of Population (%)",
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### Travel Time Distribution by Zones")
+
+    fig3 = px.histogram(
+        zone_best_access,
+        x='Tiempo_Viaje_Total_Minutos',
+        nbins=40,
+        histnorm='percent',
+        color_discrete_sequence=['#EBEBEB']
+    )
+
+    travel_times_zones = zone_best_access['Tiempo_Viaje_Total_Minutos'].dropna()
+    kde = stats.gaussian_kde(travel_times_zones)
+    x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
+    y_kde = kde(x_range)
+    y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40
+
+    fig3.add_trace(go.Scatter(
+        x=x_range,
+        y=y_kde_normalized,
+        mode='lines',
+        line=dict(color='#C00000', width=3),
+        showlegend=False
+    ))
+
+    total_zones = len(zone_best_access)
+    zones_under_30_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 30).sum() / total_zones * 100
+    zones_under_45_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 45).sum() / total_zones * 100
+    zones_under_60_pct = (zone_best_access['Tiempo_Viaje_Total_Minutos'] <= 60).sum() / total_zones * 100
+
+    fig3.add_vline(x=30, line_dash="dash", line_color="green",
+                   annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)")
+    fig3.add_vline(x=45, line_dash="dash", line_color="orange",
+                   annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)")
+    fig3.add_vline(x=60, line_dash="dash", line_color="red",
+                   annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)")
+
+    fig3 = apply_standard_chart_styling(
+        fig3,
+        "Travel Time Distribution by Zones",
+        "Total Travel Time (minutes)",
+        "Percentage of Zones (%)",
+    )
+    st.plotly_chart(fig3, use_container_width=True)
 
     # TAB 2: POI Analysis
     with tab2:
@@ -1023,118 +756,137 @@ if uploaded_file is not None:
 
         poi_df = pd.DataFrame(poi_accessibility).sort_values('Avg Time (weighted)')
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("#### 🟢 Best Connected POIs")
-            best_pois = poi_df.head(5)
-            fig4 = px.bar(
-                best_pois,
-                x='Avg Time (weighted)',
-                y='POI',
-                orientation='h',
-                color='Excellent (%)',
-                color_continuous_scale='Greens',
-                text='Avg Time (weighted)',
-                hover_data={'Total Population': ':,.0f'}
-            )
-            fig4.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
-            fig4.update_layout(height=300, yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig4, use_container_width=True)
-
-        with col2:
-            st.markdown("#### 🔴 Worst Connected POIs")
-            worst_pois = poi_df.tail(5)
-            fig5 = px.bar(
-                worst_pois,
-                x='Avg Time (weighted)',
-                y='POI',
-                orientation='h',
-                color='Poor (%)',
-                color_continuous_scale='Reds',
-                text='Avg Time (weighted)',
-                hover_data={'Total Population': ':,.0f'}
-            )
-            fig5.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
-            fig5.update_layout(height=300, yaxis={'categoryorder': 'total descending'})
-            st.plotly_chart(fig5, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("#### Accessibility Breakdown by POI")
-
-        poi_df_sorted = poi_df.sort_values('Avg Time (weighted)')
-
-        fig6 = go.Figure()
-        fig6.add_trace(go.Bar(
-            name='🟢 Excellent (<30min)',
-            y=poi_df_sorted['POI'],
-            x=poi_df_sorted['Excellent (%)'],
+        st.markdown("#### 🟢 Best Connected POIs")
+        best_pois = poi_df.head(5)
+        fig4 = px.bar(
+            best_pois,
+            x='Avg Time (weighted)',
+            y='POI',
             orientation='h',
-            marker_color='#2ecc71',
-            text=poi_df_sorted['Excellent (%)'].round(1),
-            textposition='inside',
-            texttemplate='%{text:.0f}%'
-        ))
-        fig6.add_trace(go.Bar(
-            name='🟡 Good (30-45min)',
-            y=poi_df_sorted['POI'],
-            x=poi_df_sorted['Good (%)'],
-            orientation='h',
-            marker_color='#f1c40f',
-            text=poi_df_sorted['Good (%)'].round(1),
-            textposition='inside',
-            texttemplate='%{text:.0f}%'
-        ))
-        fig6.add_trace(go.Bar(
-            name='🟠 Fair (45-60min)',
-            y=poi_df_sorted['POI'],
-            x=poi_df_sorted['Fair (%)'],
-            orientation='h',
-            marker_color='#e67e22',
-            text=poi_df_sorted['Fair (%)'].round(1),
-            textposition='inside',
-            texttemplate='%{text:.0f}%'
-        ))
-        fig6.add_trace(go.Bar(
-            name='🔴 Poor (>60min)',
-            y=poi_df_sorted['POI'],
-            x=poi_df_sorted['Poor (%)'],
-            orientation='h',
-            marker_color='#e74c3c',
-            text=poi_df_sorted['Poor (%)'].round(1),
-            textposition='inside',
-            texttemplate='%{text:.0f}%'
-        ))
-        fig6.update_layout(
-            barmode='stack',
-            title='POI Accessibility Quality Distribution',
-            xaxis_title='Percentage of Population (%)',
-            yaxis_title='Destination POI',
-            height=max(400, len(poi_df) * 25),
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            color='Excellent (%)',
+            color_continuous_scale='Greens',
+            text='Avg Time (weighted)',
+            hover_data={'Total Population': ':,.0f'}
         )
-        st.plotly_chart(fig6, use_container_width=True)
-
-        st.markdown("#### Detailed POI Statistics")
-        display_df = poi_df[
-            ['POI', 'Avg Time (weighted)', 'Total Population', 'Excellent (%)', 'Good (%)', 'Fair (%)', 'Poor (%)']
-        ].copy()
-        st.dataframe(
-            display_df.style.format({
-                'Avg Time (weighted)': '{:.1f} min',
-                'Total Population': '{:,.0f}',
-                'Excellent (%)': '{:.1f}%',
-                'Good (%)': '{:.1f}%',
-                'Fair (%)': '{:.1f}%',
-                'Poor (%)': '{:.1f}%'
-            }).background_gradient(subset=['Avg Time (weighted)'], cmap='RdYlGn_r'),
-            hide_index=True,
-            use_container_width=True,
-            height=400
+        fig4 = apply_standard_chart_styling(
+            fig4,
+            "",
+            "Avg Time (weighted)",
+            "POI",
+            height=300
         )
+        fig4.update_layout(yaxis={'categoryorder': 'total ascending'})
+        fig4.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+        st.plotly_chart(fig4, use_container_width=True)
 
-    # TAB 3: Priority Areas
+        st.markdown("#### 🔴 Worst Connected POIs")
+        worst_pois = poi_df.tail(5)
+        fig5 = px.bar(
+            worst_pois,
+            x='Avg Time (weighted)',
+            y='POI',
+            orientation='h',
+            color='Poor (%)',
+            color_continuous_scale='Reds',
+            text='Avg Time (weighted)',
+            hover_data={'Total Population': ':,.0f'}
+        )
+        fig5 = apply_standard_chart_styling(
+            fig5,
+            "",
+            "Avg Time (weighted)",
+            "POI",
+            height=300
+        )
+        fig5.update_layout(yaxis={'categoryorder': 'total descending'})
+        fig5.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+        st.plotly_chart(fig5, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("#### Accessibility Breakdown by POI")
+
+    poi_df_sorted = poi_df.sort_values('Avg Time (weighted)')
+
+    fig6 = go.Figure()
+    fig6.add_trace(go.Bar(
+        name='🟢 Excellent (<30min)',
+        y=poi_df_sorted['POI'],
+        x=poi_df_sorted['Excellent (%)'],
+        orientation='h',
+        marker_color='#2ecc71',
+        text=poi_df_sorted['Excellent (%)'].round(1),
+        textposition='inside',
+        texttemplate='%{text:.0f}%'
+    ))
+    fig6.add_trace(go.Bar(
+        name='🟡 Good (30-45min)',
+        y=poi_df_sorted['POI'],
+        x=poi_df_sorted['Good (%)'],
+        orientation='h',
+        marker_color='#f1c40f',
+        text=poi_df_sorted['Good (%)'].round(1),
+        textposition='inside',
+        texttemplate='%{text:.0f}%'
+    ))
+    fig6.add_trace(go.Bar(
+        name='🟠 Fair (45-60min)',
+        y=poi_df_sorted['POI'],
+        x=poi_df_sorted['Fair (%)'],
+        orientation='h',
+        marker_color='#e67e22',
+        text=poi_df_sorted['Fair (%)'].round(1),
+        textposition='inside',
+        texttemplate='%{text:.0f}%'
+    ))
+    fig6.add_trace(go.Bar(
+        name='🔴 Poor (>60min)',
+        y=poi_df_sorted['POI'],
+        x=poi_df_sorted['Poor (%)'],
+        orientation='h',
+        marker_color='#e74c3c',
+        text=poi_df_sorted['Poor (%)'].round(1),
+        textposition='inside',
+        texttemplate='%{text:.0f}%'
+    ))
+    fig6 = apply_standard_chart_styling(
+        fig6,
+        'POI Accessibility Quality Distribution (Population-Weighted)',
+        'Percentage of Population (%)',
+        'Destination POI',
+        height=max(400, len(poi_df) * 25)
+    )
+    fig6.update_layout(
+        barmode='stack',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=16)
+        )
+    )
+    st.plotly_chart(fig6, use_container_width=True)
+
+    st.markdown("#### Detailed POI Statistics")
+    display_df = poi_df[
+        ['POI', 'Avg Time (weighted)', 'Total Population', 'Excellent (%)', 'Good (%)', 'Fair (%)', 'Poor (%)']
+    ].copy()
+    st.dataframe(
+        display_df.style.format({
+            'Avg Time (weighted)': '{:.1f} min',
+            'Total Population': '{:,.0f}',
+            'Excellent (%)': '{:.1f}%',
+            'Good (%)': '{:.1f}%',
+            'Fair (%)': '{:.1f}%',
+            'Poor (%)': '{:.1f}%'
+        }).background_gradient(subset=['Avg Time (weighted)'], cmap='RdYlGn_r'),
+        hide_index=True,
+        use_container_width=True,
+        height=400
+    )
+
+# TAB 3: Priority Areas
     with tab3:
         st.subheader("Priority Areas for Service Improvement")
         st.markdown("*Origin zones with poor accessibility affecting the most residents*")
@@ -1151,104 +903,63 @@ if uploaded_file is not None:
 
         poor_zones = zone_priority[zone_priority['Avg Travel Time'] > 45].sort_values('Population', ascending=False)
 
-        col1, col2 = st.columns([3, 2])
-
-        with col1:
+        # Chart first
+        if len(poor_zones) > 0:
             st.markdown("#### 🔴 High-Population Zones with Worst Accessibility")
-            if len(poor_zones) > 0:
-                st.markdown(
-                    f"**{len(poor_zones)} zones** with **{poor_zones['Population'].sum():,.0f} residents** have average travel times exceeding 45 minutes")
+            st.markdown(
+                f"**{len(poor_zones)} zones** with **{poor_zones['Population'].sum():,.0f} residents** have average travel times exceeding 45 minutes")
 
-                top_poor = poor_zones.head(15)
-                fig7 = px.bar(
-                    top_poor,
-                    x='Population',
-                    y='Zone Name',
-                    orientation='h',
-                    color='Avg Travel Time',
-                    color_continuous_scale='Reds',
-                    hover_data=['Avg Transfers', 'POIs Served'],
-                    text='Population'
-                )
-                fig7.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-                fig7.update_layout(
-                    height=500,
-                    yaxis={'categoryorder': 'total ascending'},
-                    xaxis_title='Population (residents)',
-                    yaxis_title='Origin Zone'
-                )
-                st.plotly_chart(fig7, use_container_width=True)
-            else:
-                st.success("✅ No zones with poor average accessibility found!")
-
-        with col2:
-            st.markdown("#### Key Impact Metrics")
-
-            if len(poor_zones) > 0:
-                avg_poor = poor_zones['Avg Travel Time'].mean()
-                avg_transfers_poor = poor_zones['Avg Transfers'].mean()
-                total_affected_pop = poor_zones['Population'].sum()
-                pct_affected = (total_affected_pop / total_population * 100) if total_population > 0 else 0
-
-                st.error(f"**Avg travel time in poor zones:** {avg_poor:.1f} minutes")
-                st.warning(f"**Avg transfers needed:** {avg_transfers_poor:.2f}")
-                st.info(f"**Population affected:** {total_affected_pop:,.0f} residents ({pct_affected:.1f}% of total)")
-
-                st.markdown("#### Most Critical Zones")
-                st.markdown("*(by population affected)*")
-                for idx, row in poor_zones.head(5).iterrows():
-                    st.write(f"**{row['Zone Name']}**")
-                    st.write(f"→ {row['Population']:,.0f} residents")
-                    st.write(f"→ {row['Avg Travel Time']:.1f} min avg")
-                    st.markdown("---")
-            else:
-                st.success("✅ All zones have good accessibility!")
-
-        # Problem matrix: POI vs Origin zones with poor access
-        st.markdown("---")
-        st.markdown("#### Problem Matrix: Which high-population zones struggle to reach their POI?")
-        st.markdown("*Showing zones with highest population impact*")
-
-        # Filter for problematic connections (>45 min)
-        problem_connections = df_filtered[df_filtered['Tiempo_Viaje_Total_Minutos'] > 45].copy()
-
-        if len(problem_connections) > 0:
-            # Get zones with highest population
-            zone_pops = problem_connections.groupby(['Zona_Origen', 'Zona_Origen_nombre']).agg({
-                'Poblacion_Origen': 'first'
-            }).reset_index().sort_values('Poblacion_Origen', ascending=False)
-
-            top_problem_zones = zone_pops.head(10)['Zona_Origen_nombre'].values
-
-            # Get POIs with most problematic connections
-            top_problem_pois = problem_connections['Zona_Destino_nombre'].value_counts().head(8).index
-
-            # Create pivot table
-            problem_matrix = problem_connections[
-                (problem_connections['Zona_Origen_nombre'].isin(top_problem_zones)) &
-                (problem_connections['Zona_Destino_nombre'].isin(top_problem_pois))
-                ].pivot_table(
-                values='Tiempo_Viaje_Total_Minutos',
-                index='Zona_Origen_nombre',
-                columns='Zona_Destino_nombre',
-                aggfunc='mean'
+            top_poor = poor_zones.head(15)
+            fig7 = px.bar(
+                top_poor,
+                x='Population',
+                y='Zone Name',
+                orientation='h',
+                color='Avg Travel Time',
+                color_continuous_scale='Reds',
+                hover_data=['Avg Transfers', 'POIs Served'],
+                text='Population'
             )
+            fig7 = apply_standard_chart_styling(
+                fig7,
+                "High-Population Zones with Worst Accessibility",
+                "Population (residents)",
+                "Origin Zone",
+                height=500
+            )
+            fig7.update_layout(yaxis={'categoryorder': 'total ascending'})
+            fig7.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+            st.plotly_chart(fig7, use_container_width=True)
 
-            if not problem_matrix.empty:
-                fig8 = px.imshow(
-                    problem_matrix,
-                    color_continuous_scale='RdYlGn_r',
-                    aspect='auto',
-                    labels=dict(x="Destination POI", y="Origin Zone (high population)", color="Travel Time (min)")
-                )
-                fig8.update_layout(height=500)
-                st.plotly_chart(fig8, use_container_width=True)
-            else:
-                st.info("No significant problem patterns found.")
+            # Metrics below chart
+            st.markdown("#### Key Impact Metrics")
+            # metrics code here
         else:
-            st.success("✅ No problematic connections found!")
+            st.success("✅ No zones with poor average accessibility found!")
 
-    # TAB 4: Distance Efficiency
+        st.markdown("#### Key Impact Metrics")
+
+        if len(poor_zones) > 0:
+            avg_poor = poor_zones['Avg Travel Time'].mean()
+            avg_transfers_poor = poor_zones['Avg Transfers'].mean()
+            total_affected_pop = poor_zones['Population'].sum()
+            pct_affected = (total_affected_pop / total_population * 100) if total_population > 0 else 0
+
+            st.error(f"**Avg travel time in poor zones:** {avg_poor:.1f} minutes")
+            st.warning(f"**Avg transfers needed:** {avg_transfers_poor:.2f}")
+            st.info(f"**Population affected:** {total_affected_pop:,.0f} residents ({pct_affected:.1f}% of total)")
+
+            st.markdown("#### Most Critical Zones")
+            st.markdown("*(by population affected)*")
+            for idx, row in poor_zones.head(5).iterrows():
+                st.write(f"**{row['Zone Name']}**")
+                st.write(f"→ {row['Population']:,.0f} residents")
+                st.write(f"→ {row['Avg Travel Time']:.1f} min avg")
+                st.markdown("---")
+        else:
+            st.success("✅ All zones have good accessibility!")
+
+# TAB 4: Distance Efficiency
     with tab4:
         st.subheader("Distance vs Travel Time Efficiency")
         st.markdown("*Identifying where service is slow despite short distances*")
@@ -1280,8 +991,11 @@ if uploaded_file is not None:
             line=dict(color='green', dash='dash', width=2)
         ))
 
-        fig9.update_layout(
-            title='Travel Time vs Distance (points above green line are slower than 20 km/h average)',
+        fig9 = apply_standard_chart_styling(
+            fig9,
+            'Travel Time vs Distance (points above green line are slower than 20 km/h average)',
+            'Distance (km)',
+            'Travel Time (min)',
             height=500
         )
         st.plotly_chart(fig9, use_container_width=True)
@@ -1334,10 +1048,11 @@ if uploaded_file is not None:
                 'Population': ':,.0f'
             }
         )
-        fig10.update_layout(
-            title='Travel Time Efficiency by Zone (All zones by population, lower = better)',
-            xaxis_title='Origin Zone',
-            yaxis_title='Average Minutes per Kilometer',
+        fig10 = apply_standard_chart_styling(
+            fig10,
+            'Travel Time Efficiency by Zone (All zones by population, lower = better)',
+            'Origin Zone',
+            'Average Minutes per Kilometer',
             height=400
         )
         fig10.update_xaxes(tickangle=45)
@@ -1359,12 +1074,13 @@ if uploaded_file is not None:
             use_container_width=True
         )
 
-    # TAB 5: Trip Need Patterns
+# TAB 5: Trip Need Patterns
     with tab5:
         st.subheader("Trip Need Analysis")
         st.markdown("*Understanding which origin-destination pairs have actual travel need*")
 
         if 'Necesita_viaje' in df_all.columns:
+            # Calculate zone-level need statistics
             zone_need = df_all.groupby('Zona_Origen').agg({
                 'Necesita_viaje': 'sum',
                 'Poblacion_Origen': 'first',
@@ -1372,6 +1088,7 @@ if uploaded_file is not None:
             }).reset_index()
             zone_need['Necesita_viaje'] = zone_need['Necesita_viaje'] > 0
 
+            # Calculate population statistics
             pop_with_need = zone_need[zone_need['Necesita_viaje']]['Poblacion_Origen'].sum()
             pop_without_need = zone_need[~zone_need['Necesita_viaje']]['Poblacion_Origen'].sum()
             total_pop = zone_need['Poblacion_Origen'].sum()
@@ -1402,61 +1119,59 @@ if uploaded_file is not None:
             st.markdown("---")
             st.markdown("### Population Distribution by Trip Necessity")
 
-            col1, col2 = st.columns(2)
+            # Create pie chart for population distribution
+            pop_data = pd.DataFrame({
+                'Category': ['Residents needing trips', 'Residents not needing trips'],
+                'Population': [pop_with_need, pop_without_need],
+                'Percentage': [pop_with_need_pct, 100 - pop_with_need_pct]
+            })
 
-            with col1:
-                # Pie chart for population
-                pop_data = pd.DataFrame({
-                    'Category': ['Residents needing trips', 'Residents not needing trips'],
-                    'Population': [pop_with_need, pop_without_need],
-                    'Percentage': [pop_with_need_pct, 100 - pop_with_need_pct]
-                })
+            fig_pop = px.pie(
+                pop_data,
+                values='Population',
+                names='Category',
+                color='Category',
+                color_discrete_map={
+                    'Residents needing trips': '#3498db',
+                    'Residents not needing trips': '#95a5a6'
+                },
+                hole=0.4
+            )
+            fig_pop = apply_standard_chart_styling(
+                fig_pop,
+                'Population by Trip Necessity',
+                '',
+                '',
+                height=400
+            )
+            fig_pop.update_layout(showlegend=False)
+            fig_pop.update_traces(
+                textposition='inside',
+                textinfo='percent+label',
+                texttemplate='<b>%{label}</b><br>%{value:,.0f} residents<br>(%{percent})'
+            )
+            st.plotly_chart(fig_pop, use_container_width=True)
 
-                fig_pop = px.pie(
-                    pop_data,
-                    values='Population',
-                    names='Category',
-                    color='Category',
-                    color_discrete_map={
-                        'Residents needing trips': '#3498db',
-                        'Residents not needing trips': '#95a5a6'
-                    },
-                    hole=0.4
-                )
-                fig_pop.update_traces(
-                    textposition='inside',
-                    textinfo='percent+label',
-                    texttemplate='<b>%{label}</b><br>%{value:,.0f} residents<br>(%{percent})'
-                )
-                fig_pop.update_layout(
-                    title='Population by Trip Necessity',
-                    height=400,
-                    showlegend=False
-                )
-                st.plotly_chart(fig_pop, use_container_width=True)
+            # Show zones with no need
+            zones_no_need = zone_need[~zone_need['Necesita_viaje']].sort_values('Poblacion_Origen', ascending=False)
 
-            with col2:
-                # Show zones with no need
-                zones_no_need = zone_need[~zone_need['Necesita_viaje']].sort_values('Poblacion_Origen',
-                                                                                    ascending=False)
+            if len(zones_no_need) > 0:
+                st.markdown("#### Zones with No Trip Need")
+                st.markdown(
+                    f"*{len(zones_no_need)} zones with {pop_without_need:,.0f} residents don't need to reach any POI*")
 
-                if len(zones_no_need) > 0:
-                    st.markdown("#### Zones with No Trip Need")
-                    st.markdown(
-                        f"*{len(zones_no_need)} zones with {pop_without_need:,.0f} residents don't need to reach any POI*")
-
-                    if len(zones_no_need) > 10:
-                        st.markdown("**Top 10 by population:**")
-                        display_zones = zones_no_need.head(10)
-                    else:
-                        display_zones = zones_no_need
-
-                    for idx, row in display_zones.iterrows():
-                        st.write(f"**{row['Zona_Origen_nombre']}**: {row['Poblacion_Origen']:,.0f} residents")
+                if len(zones_no_need) > 10:
+                    st.markdown("**Top 10 by population:**")
+                    display_zones = zones_no_need.head(10)
                 else:
-                    st.success("All zones have trip need to at least one POI!")
+                    display_zones = zones_no_need
 
-            # Need by POI - with population weighting
+                for idx, row in display_zones.iterrows():
+                    st.write(f"**{row['Zona_Origen_nombre']}**: {row['Poblacion_Origen']:,.0f} residents")
+            else:
+                st.success("All zones have trip need to at least one POI!")
+
+            # Need by POI analysis
             st.markdown("---")
             st.markdown("### Trip Need by Destination POI")
             st.markdown("*Showing both trip-based and population-based need*")
@@ -1486,10 +1201,9 @@ if uploaded_file is not None:
                     'Population_Need_Rate_%': pop_need_rate
                 })
 
-            need_by_poi = pd.DataFrame(poi_need_analysis).sort_values('Population_Need_Rate_%',
-                                                                      ascending=False)
+            need_by_poi = pd.DataFrame(poi_need_analysis).sort_values('Population_Need_Rate_%', ascending=False)
 
-            # Dual bar chart
+            # Create dual bar chart
             fig_need = go.Figure()
 
             top_15 = need_by_poi.head(15)
@@ -1520,14 +1234,24 @@ if uploaded_file is not None:
                 customdata=top_15[['Population_Needing']].values
             ))
 
+            fig_need = apply_standard_chart_styling(
+                fig_need,
+                'Top 15 POIs by Need Rate (Trip-based vs Population-based)',
+                'Need Rate (%)',
+                'Destination POI',
+                height=600
+            )
             fig_need.update_layout(
-                title='Top 15 POIs by Need Rate (Trip-based vs Population-based)',
-                xaxis_title='Need Rate (%)',
-                yaxis_title='Destination POI',
-                height=600,
                 yaxis={'categoryorder': 'total ascending'},
                 barmode='group',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1,
+                    font=dict(size=16)
+                )
             )
             st.plotly_chart(fig_need, use_container_width=True)
 
@@ -1550,7 +1274,6 @@ if uploaded_file is not None:
             )
         else:
             st.warning("⚠️ 'Necesita_viaje' column not found in the dataset")
-
     # TAB 6: Geographic Analysis
     with tab6:
         st.subheader("Geographic Analysis by Municipality & Comarca")
@@ -1585,10 +1308,10 @@ if uploaded_file is not None:
                     excellent = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] <= 30][
                                     'Poblacion_Origen'].sum() / total_pop_muni * 100
                     good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) & (
-                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
                                'Poblacion_Origen'].sum() / total_pop_muni * 100
                     fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) & (
-                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
                                'Poblacion_Origen'].sum() / total_pop_muni * 100
                     poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 60][
                                'Poblacion_Origen'].sum() / total_pop_muni * 100
@@ -1603,79 +1326,89 @@ if uploaded_file is not None:
             muni_analysis = muni_analysis.sort_values('Avg Travel Time', ascending=False)
 
             # Municipality charts
-            col1, col2 = st.columns(2)
 
-            with col1:
-                fig_muni_time = px.bar(
-                    muni_analysis.head(15),
-                    x='Avg Travel Time',
-                    y='Municipality',
-                    orientation='h',
-                    color='Total Population',
-                    color_continuous_scale='Blues',
-                    text='Avg Travel Time',
-                    title="Top 15 Municipalities by Average Travel Time"
-                )
-                fig_muni_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
-                fig_muni_time.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-                st.plotly_chart(fig_muni_time, use_container_width=True)
+            fig_muni_time = px.bar(
+                muni_analysis.head(15),
+                x='Avg Travel Time',
+                y='Municipality',
+                orientation='h',
+                color='Total Population',
+                color_continuous_scale='Blues',
+                text='Avg Travel Time',
+                title="Top 15 Municipalities by Average Travel Time"
+            )
+            fig_muni_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            fig_muni_time.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig_muni_time, use_container_width=True)
 
-            with col2:
-                # Stacked bar for accessibility categories
-                fig_muni_access = go.Figure()
+            # Stacked bar for accessibility categories
+            fig_muni_access = go.Figure()
 
-                top_15_muni = muni_analysis.sort_values('Total Population', ascending=False).head(15)
+            top_15_muni = muni_analysis.sort_values('Total Population', ascending=False).head(15)
 
-                fig_muni_access.add_trace(go.Bar(
-                    name='🟢 Excellent',
-                    y=top_15_muni['Municipality'],
-                    x=top_15_muni['Excellent (%)'],
-                    orientation='h',
-                    marker_color='#2ecc71',
-                    text=top_15_muni['Excellent (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_muni_access.add_trace(go.Bar(
-                    name='🟡 Good',
-                    y=top_15_muni['Municipality'],
-                    x=top_15_muni['Good (%)'],
-                    orientation='h',
-                    marker_color='#f1c40f',
-                    text=top_15_muni['Good (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_muni_access.add_trace(go.Bar(
-                    name='🟠 Fair',
-                    y=top_15_muni['Municipality'],
-                    x=top_15_muni['Fair (%)'],
-                    orientation='h',
-                    marker_color='#e67e22',
-                    text=top_15_muni['Fair (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_muni_access.add_trace(go.Bar(
-                    name='🔴 Poor',
-                    y=top_15_muni['Municipality'],
-                    x=top_15_muni['Poor (%)'],
-                    orientation='h',
-                    marker_color='#e74c3c',
-                    text=top_15_muni['Poor (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
+            fig_muni_access.add_trace(go.Bar(
+                name='🟢 Excellent',
+                y=top_15_muni['Municipality'],
+                x=top_15_muni['Excellent (%)'],
+                orientation='h',
+                marker_color='#2ecc71',
+                text=top_15_muni['Excellent (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_muni_access.add_trace(go.Bar(
+                name='🟡 Good',
+                y=top_15_muni['Municipality'],
+                x=top_15_muni['Good (%)'],
+                orientation='h',
+                marker_color='#f1c40f',
+                text=top_15_muni['Good (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_muni_access.add_trace(go.Bar(
+                name='🟠 Fair',
+                y=top_15_muni['Municipality'],
+                x=top_15_muni['Fair (%)'],
+                orientation='h',
+                marker_color='#e67e22',
+                text=top_15_muni['Fair (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_muni_access.add_trace(go.Bar(
+                name='🔴 Poor',
+                y=top_15_muni['Municipality'],
+                x=top_15_muni['Poor (%)'],
+                orientation='h',
+                marker_color='#e74c3c',
+                text=top_15_muni['Poor (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
 
-                fig_muni_access.update_layout(
-                    barmode='stack',
-                    title='Top 15 Municipalities by Population - Accessibility Distribution',
-                    xaxis_title='% of Population',
-                    yaxis_title='Municipality',
-                    height=500,
-                    yaxis={'categoryorder': 'total ascending'}
-                )
-                st.plotly_chart(fig_muni_access, use_container_width=True)
+            fig_muni_access = apply_standard_chart_styling(
+                fig_muni_access,
+                'Top 15 Municipalities by Population - Accessibility Distribution',
+                '% of Population',
+                'Municipio',
+                height=1000,
+                width=1400
+            )
+            fig_muni_access.update_layout(
+                barmode='stack',
+                yaxis={'categoryorder': 'total ascending'},
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5,
+                    font=dict(size=16)
+                ),
+                margin=dict(l=200, r=100, t=100, b=80)
+            )
+            st.plotly_chart(fig_muni_access, use_container_width=True)
 
             # Municipality table
             st.markdown("#### Detailed Municipality Statistics")
@@ -1692,7 +1425,7 @@ if uploaded_file is not None:
                 }).background_gradient(subset=['Avg Travel Time'], cmap='RdYlGn_r'),
                 hide_index=True,
                 use_container_width=True,
-                height=400
+                height=1000
             )
 
             # COMARCA ANALYSIS
@@ -1723,10 +1456,10 @@ if uploaded_file is not None:
                     excellent = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] <= 30][
                                     'Poblacion_Origen'].sum() / total_pop_comarca * 100
                     good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) & (
-                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
                                'Poblacion_Origen'].sum() / total_pop_comarca * 100
                     fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) & (
-                                zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
                                'Poblacion_Origen'].sum() / total_pop_comarca * 100
                     poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 60][
                                'Poblacion_Origen'].sum() / total_pop_comarca * 100
@@ -1741,148 +1474,160 @@ if uploaded_file is not None:
             comarca_analysis = comarca_analysis.sort_values('Avg Travel Time', ascending=False)
 
             # Comarca charts
-            col1, col2 = st.columns(2)
 
-            with col1:
-                fig_comarca_time = px.bar(
-                    comarca_analysis,
-                    x='Avg Travel Time',
-                    y='Comarca',
-                    orientation='h',
-                    color='Total Population',
-                    color_continuous_scale='Reds',
-                    text='Avg Travel Time',
-                    title="Comarcas by Average Travel Time"
-                )
-                fig_comarca_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
-                fig_comarca_time.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
-                st.plotly_chart(fig_comarca_time, use_container_width=True)
-
-            with col2:
-                # Stacked bar for comarca accessibility
-                fig_comarca_access = go.Figure()
-
-                comarca_sorted = comarca_analysis.sort_values('Total Population', ascending=False)
-
-                fig_comarca_access.add_trace(go.Bar(
-                    name='🟢 Excellent',
-                    y=comarca_sorted['Comarca'],
-                    x=comarca_sorted['Excellent (%)'],
-                    orientation='h',
-                    marker_color='#2ecc71',
-                    text=comarca_sorted['Excellent (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_comarca_access.add_trace(go.Bar(
-                    name='🟡 Good',
-                    y=comarca_sorted['Comarca'],
-                    x=comarca_sorted['Good (%)'],
-                    orientation='h',
-                    marker_color='#f1c40f',
-                    text=comarca_sorted['Good (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_comarca_access.add_trace(go.Bar(
-                    name='🟠 Fair',
-                    y=comarca_sorted['Comarca'],
-                    x=comarca_sorted['Fair (%)'],
-                    orientation='h',
-                    marker_color='#e67e22',
-                    text=comarca_sorted['Fair (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-                fig_comarca_access.add_trace(go.Bar(
-                    name='🔴 Poor',
-                    y=comarca_sorted['Comarca'],
-                    x=comarca_sorted['Poor (%)'],
-                    orientation='h',
-                    marker_color='#e74c3c',
-                    text=comarca_sorted['Poor (%)'].round(1),
-                    textposition='inside',
-                    texttemplate='%{text:.0f}%'
-                ))
-
-                fig_comarca_access.update_layout(
-                    barmode='stack',
-                    title='Comarcas by Population - Accessibility Distribution',
-                    xaxis_title='% of Population',
-                    yaxis_title='Comarca',
-                    height=400,
-                    yaxis={'categoryorder': 'total ascending'}
-                )
-                st.plotly_chart(fig_comarca_access, use_container_width=True)
-
-            # Comarca table
-            st.markdown("#### Detailed Comarca Statistics")
-            st.dataframe(
-                comarca_analysis.style.format({
-                    'Total Population': '{:,.0f}',
-                    'Avg Travel Time': '{:.1f} min',
-                    'Avg Transfers': '{:.2f}',
-                    'Zones': '{:.0f}',
-                    'Municipalities': '{:.0f}',
-                    'Excellent (%)': '{:.1f}%',
-                    'Good (%)': '{:.1f}%',
-                    'Fair (%)': '{:.1f}%',
-                    'Poor (%)': '{:.1f}%'
-                }).background_gradient(subset=['Avg Travel Time'], cmap='RdYlGn_r'),
-                hide_index=True,
-                use_container_width=True,
-                height=300
+            fig_comarca_time = px.bar(
+                comarca_analysis,
+                x='Avg Travel Time',
+                y='Comarca',
+                orientation='h',
+                color='Total Population',
+                color_continuous_scale='Reds',
+                text='Avg Travel Time',
+                title="Comarcas by Average Travel Time"
             )
+            fig_comarca_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            fig_comarca_time.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig_comarca_time, use_container_width=True)
 
-    # ========================================================================
-    # DOWNLOAD SECTION - AFTER ALL DATA IS COMPUTED
-    # ========================================================================
+            # Stacked bar for comarca accessibility
+            fig_comarca_access = go.Figure()
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📥 Download Report")
+            comarca_sorted = comarca_analysis.sort_values('Total Population', ascending=False)
+
+            fig_comarca_access.add_trace(go.Bar(
+                name='🟢 Excellent',
+                y=comarca_sorted['Comarca'],
+                x=comarca_sorted['Excellent (%)'],
+                orientation='h',
+                marker_color='#2ecc71',
+                text=comarca_sorted['Excellent (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_comarca_access.add_trace(go.Bar(
+                name='🟡 Good',
+                y=comarca_sorted['Comarca'],
+                x=comarca_sorted['Good (%)'],
+                orientation='h',
+                marker_color='#f1c40f',
+                text=comarca_sorted['Good (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_comarca_access.add_trace(go.Bar(
+                name='🟠 Fair',
+                y=comarca_sorted['Comarca'],
+                x=comarca_sorted['Fair (%)'],
+                orientation='h',
+                marker_color='#e67e22',
+                text=comarca_sorted['Fair (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+            fig_comarca_access.add_trace(go.Bar(
+                name='🔴 Poor',
+                y=comarca_sorted['Comarca'],
+                x=comarca_sorted['Poor (%)'],
+                orientation='h',
+                marker_color='#e74c3c',
+                text=comarca_sorted['Poor (%)'].round(1),
+                textposition='inside',
+                texttemplate='%{text:.0f}%'
+            ))
+
+            fig_comarca_time = apply_standard_chart_styling(
+                fig_comarca_time,
+                "Comarcas by Average Travel Time",
+                "Avg Travel Time",
+                "Comarca",
+                height=400
+            )
+            fig_comarca_time.update_layout(yaxis={'categoryorder': 'total ascending'})
+            fig_comarca_time.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
+            st.plotly_chart(fig_comarca_time, use_container_width=True)
+
+            # Second chart
+            fig_comarca_access = apply_standard_chart_styling(
+                fig_comarca_access,
+                'Comarcas by Population - Accessibility Distribution',
+                '% of Population',
+                'Comarca',
+                height=400
+            )
+            fig_comarca_access.update_layout(
+                barmode='stack',
+                yaxis={'categoryorder': 'total ascending'}
+            )
+            st.plotly_chart(fig_comarca_access, use_container_width=True)
+
+        # Comarca table
+        st.markdown("#### Detailed Comarca Statistics")
+        st.dataframe(
+            comarca_analysis.style.format({
+                'Total Population': '{:,.0f}',
+                'Avg Travel Time': '{:.1f} min',
+                'Avg Transfers': '{:.2f}',
+                'Zones': '{:.0f}',
+                'Municipalities': '{:.0f}',
+                'Excellent (%)': '{:.1f}%',
+                'Good (%)': '{:.1f}%',
+                'Fair (%)': '{:.1f}%',
+                'Poor (%)': '{:.1f}%'
+            }).background_gradient(subset=['Avg Travel Time'], cmap='RdYlGn_r'),
+            hide_index=True,
+            use_container_width=True,
+            height=300
+        )
+
+# ========================================================================
+# DOWNLOAD SECTION - AFTER ALL DATA IS COMPUTED
+# ========================================================================
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📥 Download Report")
 
 
-    def create_complete_report_package():
-        """Create ZIP with Excel + all chart images"""
-        zip_buffer = BytesIO()
+def create_complete_report_package():
+    """Create ZIP with Excel + all chart images"""
+    zip_buffer = BytesIO()
 
-        # Prepare zone_need data if needed
-        if 'Necesita_viaje' in df_all.columns:
-            zone_need_for_report = df_all.groupby('Zona_Origen').agg({
-                'Necesita_viaje': 'sum',
-                'Poblacion_Origen': 'first',
-                'Zona_Origen_nombre': 'first'
-            }).reset_index()
-            zone_need_for_report['Necesita_viaje'] = zone_need_for_report['Necesita_viaje'] > 0
-        else:
-            zone_need_for_report = None
+    # Prepare zone_need data if needed
+    if 'Necesita_viaje' in df_all.columns:
+        zone_need_for_report = df_all.groupby('Zona_Origen').agg({
+            'Necesita_viaje': 'sum',
+            'Poblacion_Origen': 'first',
+            'Zona_Origen_nombre': 'first'
+        }).reset_index()
+        zone_need_for_report['Necesita_viaje'] = zone_need_for_report['Necesita_viaje'] > 0
+    else:
+        zone_need_for_report = None
 
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Add Excel report
-            excel_report = create_excel_report(df_filtered, zone_populations, total_population, poi_df, poor_zones,
-                                               df_all, zone_need_for_report)
-            zip_file.writestr(f"bizkaia_report_{datetime.now().strftime('%Y%m%d')}.xlsx", excel_report.getvalue())
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add Excel report
+        excel_report = create_excel_report(df_filtered, zone_populations, total_population, poi_df, poor_zones,
+                                           df_all, zone_need_for_report)
+        zip_file.writestr(f"bizkaia_report_{datetime.now().strftime('%Y%m%d')}.xlsx", excel_report.getvalue())
 
-            # Add all chart images
-            charts = create_all_charts(df_filtered, zone_populations, total_population, poi_df, poor_zones)
-            for filename, image_data in charts.items():
-                zip_file.writestr(filename, image_data)
+        # Add all chart images
+        charts = create_all_charts(df_filtered, zone_populations, total_population, poi_df, poor_zones)
+        for filename, image_data in charts.items():
+            zip_file.writestr(filename, image_data)
 
-        zip_buffer.seek(0)
-        return zip_buffer
+    zip_buffer.seek(0)
+    return zip_buffer
 
 
-    # Generate and offer download
-    report_package = create_complete_report_package()
+# Generate and offer download
+report_package = create_complete_report_package()
 
-    st.sidebar.download_button(
-        label="📦 Download Complete Report",
-        data=report_package,
-        file_name=f"bizkaia_accessibility_report_{datetime.now().strftime('%Y%m%d')}.zip",
-        mime="application/zip",
-        help="Includes Excel report + all chart images (PNG)"
-    )
+st.sidebar.download_button(
+    label="📦 Download Complete Report",
+    data=report_package,
+    file_name=f"bizkaia_accessibility_report_{datetime.now().strftime('%Y%m%d')}.zip",
+    mime="application/zip",
+    help="Includes Excel report + all chart images (PNG)"
+)
 
-    st.sidebar.markdown("*ZIP includes:*")
-    st.sidebar.markdown("- 📊 Excel report (3 sheets)")
-    st.sidebar.markdown("- 📈 7 high-resolution charts (PNG)")
+st.sidebar.markdown("*ZIP includes:*")
+st.sidebar.markdown("- 📊 Excel report (3 sheets)")
+st.sidebar.markdown("- 📈 7 high-resolution charts (PNG)")
