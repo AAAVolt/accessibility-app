@@ -239,8 +239,8 @@ def diagnose_csv_structure(csv_file_path: str, num_rows: int = 5) -> None:
 
 if __name__ == "__main__":
     # ==== CHANGE THIS PATH ====
-    csv_file_path = r"C:\Users\avoltan\Documents\put_path_legs_quiron.csv"
-    output_file = "results/min_time_trips_per_od_optimized_quiron.csv"
+    csv_file_path = r"C:\Users\avoltan\Documents\put_path_legs_admin_uni_resi.csv"
+    output_file = "results/min_time_trips_per_od_optimized_admin_uni_resi.csv"
 
     # First, let's diagnose the CSV structure
     print("🔧 Diagnosing CSV structure first...")
