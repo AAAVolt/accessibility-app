@@ -325,8 +325,8 @@ def print_summary_statistics(df):
 # Example usage
 if __name__ == "__main__":
     # Replace with your actual file path
-    input_file = r"C:\Users\avoltan\PyCharmMiscProject\accessibility\results\accessibility_with_times_hacienda.csv"
-    output_file = "results/datos_accesibilidad_hacienda.csv"
+    input_file = r"C:\Users\avoltan\PyCharmMiscProject\accessibility\results\accessibility_with_times_leioa.csv"
+    output_file = "results/datos_accesibilidad_leioa.csv"
 
     try:
         # Clean the data

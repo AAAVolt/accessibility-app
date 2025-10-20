@@ -1031,14 +1031,15 @@ class StreamlitApp:
         zone_efficiency['Effective Speed (km/h)'] = 60 / zone_efficiency['Min per Km']
 
         # Chart
-        top_zones = zone_efficiency.sort_values('Population', ascending=False)
+        top_zones = zone_efficiency.sort_values('Min per Km', ascending=False)
+        worse_zones = zone_efficiency.sort_values('Min per Km', ascending=False).head(25)
 
         fig = px.bar(
-            top_zones.sort_values('Min per Km', ascending=False),
+            worse_zones.sort_values('Min per Km', ascending=False),
             x='Zone Name',
             y='Min per Km',
             color='Min per Km',
-            color_continuous_scale='RdYlGn_r',
+            color_continuous_scale='Reds',
             hover_data={
                 'Effective Speed (km/h)': ':.1f',
                 'Avg Distance (km)': ':.1f',
@@ -1310,7 +1311,7 @@ class StreamlitApp:
         )
 
     def render_geographic_analysis_tab(self, analyzer: AccessibilityAnalyzer):
-        """Render geographic analysis tab"""
+        """Render geographic analysis tab with filtering capabilities"""
         st.subheader("Geographic Analysis by Municipality & Comarca")
         st.markdown("*Accessibility patterns across municipalities and comarcas*")
 
@@ -1320,51 +1321,234 @@ class StreamlitApp:
             st.warning("⚠️ 'Municipio' or 'Comarca' columns not found in the dataset")
             return
 
+        # Create filter columns
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Municipality filter
+            municipalities = ['All'] + sorted(df['Municipio'].unique().tolist())
+            selected_municipality = st.selectbox(
+                "Filter by Municipality:",
+                municipalities,
+                index=0
+            )
+
+        with col2:
+            # Comarca filter
+            comarcas = ['All'] + sorted(df['Comarca'].unique().tolist())
+            selected_comarca = st.selectbox(
+                "Filter by Comarca:",
+                comarcas,
+                index=0
+            )
+
+        # Apply filters
+        filtered_df = df.copy()
+
+        if selected_municipality != 'All':
+            filtered_df = filtered_df[filtered_df['Municipio'] == selected_municipality]
+
+        if selected_comarca != 'All':
+            filtered_df = filtered_df[filtered_df['Comarca'] == selected_comarca]
+
+        # Check if we have data after filtering
+        if len(filtered_df) == 0:
+            st.warning("No data available for the selected filters.")
+            return
+
+        # Display filter status
+        if selected_municipality != 'All' or selected_comarca != 'All':
+            filter_text = []
+            if selected_municipality != 'All':
+                filter_text.append(f"Municipality: **{selected_municipality}**")
+            if selected_comarca != 'All':
+                filter_text.append(f"Comarca: **{selected_comarca}**")
+
+            st.info(f"Showing data for: {' | '.join(filter_text)}")
+
+            # Show summary stats for filtered data
+            total_zones = filtered_df['Zona_Origen'].nunique()
+            total_population = filtered_df.groupby('Zona_Origen')['Poblacion_Origen'].first().sum()
+            avg_travel_time = filtered_df['Tiempo_Viaje_Total_Minutos'].mean()
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Zones in Selection", f"{total_zones}")
+            with col2:
+                st.metric("Population in Selection", f"{total_population:,.0f}")
+            with col3:
+                st.metric("Avg Travel Time", f"{avg_travel_time:.1f} min")
+
         # Municipality analysis
-        self._render_municipality_analysis(df)
+        self._render_municipality_analysis_filtered(filtered_df)
 
         # Comarca analysis
         st.markdown("---")
-        self._render_comarca_analysis(df)
+        self._render_comarca_analysis_filtered(filtered_df)
 
-    def _render_municipality_analysis(self, df: pd.DataFrame):
-        """Render municipality analysis"""
+    def _render_municipality_analysis_filtered(self, df: pd.DataFrame):
+        """Render municipality analysis with filtered data"""
         st.markdown("### Analysis by Municipality")
 
-        # Calculate municipality metrics
-        muni_analysis = self._calculate_geographic_metrics(df, 'Municipio', 'Municipality')
+        if df['Municipio'].nunique() == 1:
+            # Single municipality selected - show zone-level analysis
+            municipality_name = df['Municipio'].iloc[0]
+            st.markdown(f"#### Zone-level Analysis for {municipality_name}")
+            self._render_zone_level_analysis(df, municipality_name)
+        else:
+            # Multiple municipalities - show municipality comparison
+            muni_analysis = self._calculate_geographic_metrics(df, 'Municipio', 'Municipality')
+            self._render_geographic_charts(muni_analysis, 'Municipality', 'Municipalities', 15)
 
-        # Municipality charts
-        self._render_geographic_charts(muni_analysis, 'Municipality', 'Municipalities', 15)
+            st.markdown("#### Detailed Municipality Statistics")
+            self._render_geographic_table(muni_analysis)
 
-        # Municipality table
-        st.markdown("#### Detailed Municipality Statistics")
-        self._render_geographic_table(muni_analysis)
-
-    def _render_comarca_analysis(self, df: pd.DataFrame):
-        """Render comarca analysis"""
+    def _render_comarca_analysis_filtered(self, df: pd.DataFrame):
+        """Render comarca analysis with filtered data"""
         st.markdown("### Analysis by Comarca")
 
-        # Calculate comarca metrics (including municipality count)
-        comarca_analysis = df.groupby('Comarca').agg({
-            'Poblacion_Origen': 'sum',
+        if df['Comarca'].nunique() == 1:
+            # Single comarca selected - show municipality breakdown within comarca
+            comarca_name = df['Comarca'].iloc[0]
+            st.markdown(f"#### Municipality Breakdown for {comarca_name}")
+
+            if df['Municipio'].nunique() > 1:
+                # Multiple municipalities in the comarca
+                muni_in_comarca = self._calculate_geographic_metrics(df, 'Municipio', 'Municipality')
+                self._render_geographic_charts(muni_in_comarca, 'Municipality', 'Municipalities in Comarca',
+                                               len(muni_in_comarca))
+
+                st.markdown("#### Municipality Statistics within Comarca")
+                self._render_geographic_table(muni_in_comarca)
+            else:
+                # Single municipality in comarca - show zone analysis
+                municipality_name = df['Municipio'].iloc[0]
+                st.markdown(f"#### Zone-level Analysis for {municipality_name} (in {comarca_name})")
+                self._render_zone_level_analysis(df, f"{municipality_name} ({comarca_name})")
+        else:
+            # Multiple comarcas - show comarca comparison
+            comarca_analysis = df.groupby('Comarca').agg({
+                'Poblacion_Origen': 'sum',
+                'Tiempo_Viaje_Total_Minutos': 'mean',
+                'Numero_Transbordos': 'mean',
+                'Zona_Origen': 'nunique',
+                'Municipio': 'nunique'
+            }).reset_index()
+            comarca_analysis.columns = ['Geographic Unit', 'Total Population', 'Avg Travel Time',
+                                        'Avg Transfers', 'Zones', 'Municipalities']
+
+            comarca_analysis = self._add_accessibility_percentages(df, comarca_analysis, 'Comarca')
+            self._render_geographic_charts(comarca_analysis, 'Comarca', 'Comarcas', len(comarca_analysis))
+
+            st.markdown("#### Detailed Comarca Statistics")
+            self._render_geographic_table(comarca_analysis, include_municipalities=True)
+
+    def _render_zone_level_analysis(self, df: pd.DataFrame, area_name: str):
+        """Render zone-level analysis for a specific area"""
+        # Calculate zone-level metrics
+        zone_analysis = df.groupby(['Zona_Origen', 'Zona_Origen_nombre']).agg({
+            'Poblacion_Origen': 'first',
             'Tiempo_Viaje_Total_Minutos': 'mean',
             'Numero_Transbordos': 'mean',
-            'Zona_Origen': 'nunique',
-            'Municipio': 'nunique'
+            'Zona_Destino': 'nunique'
         }).reset_index()
-        comarca_analysis.columns = ['Geographic Unit', 'Total Population', 'Avg Travel Time',
-                                    'Avg Transfers', 'Zones', 'Municipalities']
+        zone_analysis.columns = ['Zone_ID', 'Zone_Name', 'Population', 'Avg_Travel_Time', 'Avg_Transfers',
+                                 'POIs_Served']
 
-        # Add accessibility percentages
-        comarca_analysis = self._add_accessibility_percentages(df, comarca_analysis, 'Comarca')
+        # Calculate accessibility categories for each zone
+        zone_best = df.groupby('Zona_Origen').agg({
+            'Tiempo_Viaje_Total_Minutos': 'min',
+            'Poblacion_Origen': 'first',
+            'Zona_Origen_nombre': 'first'
+        }).reset_index()
 
-        # Comarca charts
-        self._render_geographic_charts(comarca_analysis, 'Comarca', 'Comarcas', len(comarca_analysis))
+        # Create accessibility analyzer for this subset
+        subset_analyzer = AccessibilityAnalyzer(df)
+        zone_best['Best_Category'] = subset_analyzer.categorize_accessibility(zone_best['Tiempo_Viaje_Total_Minutos'])
 
-        # Comarca table
-        st.markdown("#### Detailed Comarca Statistics")
-        self._render_geographic_table(comarca_analysis, include_municipalities=True)
+        # Merge with zone analysis
+        zone_analysis = zone_analysis.merge(
+            zone_best[['Zona_Origen', 'Best_Category']],
+            left_on='Zone_ID',
+            right_on='Zona_Origen',
+            how='left'
+        ).drop('Zona_Origen', axis=1)
+
+        # Sort by population (highest first)
+        zone_analysis = zone_analysis.sort_values('Population', ascending=False)
+
+        # Create zone-level accessibility chart
+        fig = px.bar(
+            zone_analysis.head(20),  # Show top 20 zones by population
+            x='Population',
+            y='Zone_Name',
+            orientation='h',
+            color='Avg_Travel_Time',
+            color_continuous_scale='RdYlGn_r',
+            hover_data=['Avg_Transfers', 'POIs_Served'],
+            text='Population',
+            title=f"Top 20 Zones by Population in {area_name}"
+        )
+
+        fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+
+        styler = ChartStyler()
+        fig = styler.apply_standard_styling(
+            fig,
+            f"Top 20 Zones by Population in {area_name}",
+            "Population",
+            "Zone Name",
+            height=600
+        )
+        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Accessibility distribution pie chart for this area
+        pop_by_category = zone_best.groupby('Best_Category')['Poblacion_Origen'].sum()
+        total_pop = zone_best['Poblacion_Origen'].sum()
+
+        if total_pop > 0:
+            fig_pie = px.pie(
+                values=pop_by_category.values,
+                names=pop_by_category.index,
+                color=pop_by_category.index,
+                color_discrete_map={
+                    CONFIG.CATEGORY_LABELS['excellent']: CONFIG.COLORS['excellent'],
+                    CONFIG.CATEGORY_LABELS['good']: CONFIG.COLORS['good'],
+                    CONFIG.CATEGORY_LABELS['fair']: CONFIG.COLORS['fair'],
+                    CONFIG.CATEGORY_LABELS['poor']: CONFIG.COLORS['poor']
+                },
+                title=f'Accessibility Distribution in {area_name}'
+            )
+
+            fig_pie.update_traces(
+                textposition='inside',
+                textinfo='percent+label',
+                texttemplate='<b>%{label}</b><br>%{value:,.0f} residents<br>(%{percent})'
+            )
+
+            styler = ChartStyler()
+            fig_pie = styler.apply_pie_chart_styling(fig_pie, f'Accessibility Distribution in {area_name}', height=400)
+            fig_pie.update_layout(showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        # Zone statistics table
+        st.markdown(f"#### Zone Statistics for {area_name}")
+        display_df = zone_analysis[
+            ['Zone_Name', 'Population', 'Avg_Travel_Time', 'Avg_Transfers', 'POIs_Served', 'Best_Category']]
+
+        st.dataframe(
+            display_df.style.format({
+                'Population': '{:,.0f}',
+                'Avg_Travel_Time': '{:.1f} min',
+                'Avg_Transfers': '{:.2f}',
+                'POIs_Served': '{:.0f}'
+            }).background_gradient(subset=['Avg_Travel_Time'], cmap='RdYlGn_r'),
+            hide_index=True,
+            use_container_width=True,
+            height=400
+        )
+
 
     def _calculate_geographic_metrics(self, df: pd.DataFrame, group_col: str, unit_name: str) -> pd.DataFrame:
         """Calculate geographic analysis metrics"""
