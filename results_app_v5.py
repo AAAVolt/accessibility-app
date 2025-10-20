@@ -1503,34 +1503,55 @@ class StreamlitApp:
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
 
-        # Accessibility distribution pie chart for this area
+        # Accessibility distribution as single horizontal stacked bar (compact view)
         pop_by_category = zone_best.groupby('Best_Category')['Poblacion_Origen'].sum()
         total_pop = zone_best['Poblacion_Origen'].sum()
 
         if total_pop > 0:
-            fig_pie = px.pie(
-                values=pop_by_category.values,
-                names=pop_by_category.index,
-                color=pop_by_category.index,
-                color_discrete_map={
-                    CONFIG.CATEGORY_LABELS['excellent']: CONFIG.COLORS['excellent'],
-                    CONFIG.CATEGORY_LABELS['good']: CONFIG.COLORS['good'],
-                    CONFIG.CATEGORY_LABELS['fair']: CONFIG.COLORS['fair'],
-                    CONFIG.CATEGORY_LABELS['poor']: CONFIG.COLORS['poor']
-                },
-                title=f'Accessibility Distribution in {area_name}'
-            )
+            fig_access = go.Figure()
 
-            fig_pie.update_traces(
-                textposition='inside',
-                textinfo='percent+label',
-                texttemplate='<b>%{label}</b><br>%{value:,.0f} residents<br>(%{percent})'
-            )
+            categories = ['excellent', 'good', 'fair', 'poor']
+            category_labels = [CONFIG.CATEGORY_LABELS[cat] for cat in categories]
+            colors = [CONFIG.COLORS[cat] for cat in categories]
+
+            for cat, label, color in zip(categories, category_labels, colors):
+                pop = pop_by_category.get(label, 0)
+                pct = (pop / total_pop * 100) if total_pop > 0 else 0
+
+                fig_access.add_trace(go.Bar(
+                    name=label,
+                    y=[area_name],
+                    x=[pct],
+                    orientation='h',
+                    marker_color=color,
+                    text=f'{pct:.0f}%',
+                    textposition='inside',
+                    texttemplate='%{text}',
+                    hovertemplate=f'<b>{label}</b><br>Population: {pop:,.0f}<br>Percentage: {pct:.1f}%<extra></extra>'
+                ))
 
             styler = ChartStyler()
-            fig_pie = styler.apply_pie_chart_styling(fig_pie, f'Accessibility Distribution in {area_name}', height=400)
-            fig_pie.update_layout(showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            fig_access = styler.apply_standard_styling(
+                fig_access,
+                f'Accessibility Distribution in {area_name}',
+                'Percentage of Population (%)',
+                '',
+                height=210
+
+            )
+            fig_access.update_layout(
+                barmode='stack',
+                yaxis=dict(showticklabels=False),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="center",
+                    x=0.5,
+                    font=dict(size=16)
+                )
+            )
+            st.plotly_chart(fig_access, use_container_width=True)
 
         # Zone statistics table
         st.markdown(f"#### Zone Statistics for {area_name}")
@@ -1548,7 +1569,6 @@ class StreamlitApp:
             use_container_width=True,
             height=400
         )
-
 
     def _calculate_geographic_metrics(self, df: pd.DataFrame, group_col: str, unit_name: str) -> pd.DataFrame:
         """Calculate geographic analysis metrics"""
