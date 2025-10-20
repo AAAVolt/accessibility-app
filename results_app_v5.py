@@ -755,7 +755,7 @@ class StreamlitApp:
         df = analyzer.df
         pop_by_category, category_pcts = analyzer.get_population_by_category()
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             avg_travel_time = df['Tiempo_Viaje_Total_Minutos'].mean()
@@ -772,6 +772,13 @@ class StreamlitApp:
         with col4:
             total_pois = df['Zona_Destino'].nunique()
             st.metric("Total POIs", f"{total_pois}")
+
+        with col5:
+            total_weighted_time = (df['Tiempo_Viaje_Total_Minutos'] * df['Poblacion_Origen']).sum()
+            total_population = df['Poblacion_Origen'].sum()
+            avg_travel_time_weighted = total_weighted_time / total_population
+            st.metric("Avg Travel Time Pop Weighted", f"{avg_travel_time_weighted:.1f} min")
+
 
     def render_accessibility_overview_tab(self, analyzer: AccessibilityAnalyzer):
         """Render accessibility overview tab content"""
