@@ -22,19 +22,25 @@ class AccessibilityConfig:
     EXCELLENT_THRESHOLD: int = 30
     GOOD_THRESHOLD: int = 45
     FAIR_THRESHOLD: int = 60
+    MODERATE_THRESHOLD: int = 75  # NEW
+    POOR_THRESHOLD: int = 90
 
     COLORS = {
-        'excellent': '#2ecc71',
-        'good': '#f1c40f',
-        'fair': '#e67e22',
-        'poor': '#e74c3c'
+        'excellent': '#1A9850',
+        'good': '#A6D96A',
+        'fair': '#FEE08B',
+        'moderate': '#FDAE61',
+        'poor': '#F46D43',
+        'very_poor': '#D73027'
     }
 
     CATEGORY_LABELS = {
         'excellent': '🟢 Excellent (<30min)',
         'good': '🟡 Good (30-45min)',
         'fair': '🟠 Fair (45-60min)',
-        'poor': '🔴 Poor (>60min)'
+        'moderate': '🔶 Moderate (60-75min)',    # NEW
+        'poor': '🔴 Poor (75-90min)',
+        'very_poor': '⚫ Very Poor (>90min)'     # NEW
     }
 
 
@@ -62,7 +68,8 @@ class AccessibilityAnalyzer:
         return pd.cut(
             travel_times,
             bins=[0, CONFIG.EXCELLENT_THRESHOLD, CONFIG.GOOD_THRESHOLD,
-                  CONFIG.FAIR_THRESHOLD, float('inf')],
+                  CONFIG.FAIR_THRESHOLD, CONFIG.MODERATE_THRESHOLD,
+                  CONFIG.POOR_THRESHOLD, float('inf')],
             labels=list(CONFIG.CATEGORY_LABELS.values())
         )
 
@@ -101,17 +108,22 @@ class AccessibilityAnalyzer:
                 continue
 
             # Calculate population in each category
+            # Calculate population in each category
             categories = {}
             categories['excellent'] = zone_data[zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.EXCELLENT_THRESHOLD][
                 'Poblacion_Origen'].sum()
-            categories['good'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.EXCELLENT_THRESHOLD) &
-                                           (zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.GOOD_THRESHOLD)][
-                'Poblacion_Origen'].sum()
-            categories['fair'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.GOOD_THRESHOLD) &
-                                           (zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.FAIR_THRESHOLD)][
-                'Poblacion_Origen'].sum()
-            categories['poor'] = zone_data[zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.FAIR_THRESHOLD][
-                'Poblacion_Origen'].sum()
+            categories['good'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.EXCELLENT_THRESHOLD) & (
+                        zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.GOOD_THRESHOLD)]['Poblacion_Origen'].sum()
+            categories['fair'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.GOOD_THRESHOLD) & (
+                        zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.FAIR_THRESHOLD)]['Poblacion_Origen'].sum()
+            categories['moderate'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.FAIR_THRESHOLD) & (
+                        zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.MODERATE_THRESHOLD)][
+                'Poblacion_Origen'].sum()  # NEW
+            categories['poor'] = zone_data[(zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.MODERATE_THRESHOLD) & (
+                        zone_data['Tiempo_Viaje_Total_Minutos'] <= CONFIG.POOR_THRESHOLD)][
+                'Poblacion_Origen'].sum()  # UPDATED
+            categories['very_poor'] = zone_data[zone_data['Tiempo_Viaje_Total_Minutos'] > CONFIG.POOR_THRESHOLD][
+                'Poblacion_Origen'].sum()  # NEW
 
             weighted_avg_time = (zone_data['Tiempo_Viaje_Total_Minutos'] * zone_data[
                 'Poblacion_Origen']).sum() / total_pop
@@ -123,7 +135,9 @@ class AccessibilityAnalyzer:
                 'Excellent (%)': (categories['excellent'] / total_pop * 100),
                 'Good (%)': (categories['good'] / total_pop * 100),
                 'Fair (%)': (categories['fair'] / total_pop * 100),
-                'Poor (%)': (categories['poor'] / total_pop * 100)
+                'Moderate (%)': (categories['moderate'] / total_pop * 100),  # NEW
+                'Poor (%)': (categories['poor'] / total_pop * 100),
+                'Very Poor (%)': (categories['very_poor'] / total_pop * 100)  # NEW
             })
 
         return pd.DataFrame(poi_data).sort_values('Avg Time (weighted)')
@@ -257,7 +271,9 @@ class ChartGenerator:
                 CONFIG.CATEGORY_LABELS['excellent']: CONFIG.COLORS['excellent'],
                 CONFIG.CATEGORY_LABELS['good']: CONFIG.COLORS['good'],
                 CONFIG.CATEGORY_LABELS['fair']: CONFIG.COLORS['fair'],
-                CONFIG.CATEGORY_LABELS['poor']: CONFIG.COLORS['poor']
+                CONFIG.CATEGORY_LABELS['moderate']: CONFIG.COLORS['moderate'],
+                CONFIG.CATEGORY_LABELS['poor']: CONFIG.COLORS['poor'],
+                CONFIG.CATEGORY_LABELS['very_poor']: CONFIG.COLORS['very_poor']
             },
             text=[f"{int(pop):,}<br><b>{pct:.1f}%</b>" for pop, pct in zip(populations, percentages)]
         )
@@ -444,12 +460,20 @@ class ChartGenerator:
 
         fig = go.Figure()
 
-        categories = ['excellent', 'good', 'fair', 'poor']
+        categories = ['excellent', 'good', 'fair', 'moderate', 'poor', 'very_poor']
         category_labels = [CONFIG.CATEGORY_LABELS[cat] for cat in categories]
         colors = [CONFIG.COLORS[cat] for cat in categories]
 
         for cat, label, color in zip(categories, category_labels, colors):
-            col_name = f'{cat.title()} (%)'
+            col_name_mapping = {
+                'excellent': 'Excellent (%)',
+                'good': 'Good (%)',
+                'fair': 'Fair (%)',
+                'moderate': 'Moderate (%)',
+                'poor': 'Poor (%)',
+                'very_poor': 'Very Poor (%)'
+            }
+            col_name = col_name_mapping[cat]
             fig.add_trace(go.Bar(
                 name=label,
                 y=poi_sorted['POI'],
@@ -537,7 +561,7 @@ class ReportGenerator:
         }
 
         # Add accessibility breakdown
-        for category in ['excellent', 'good', 'fair', 'poor']:
+        for category in ['excellent', 'good', 'fair', 'moderate', 'poor', 'very_poor']:
             label = CONFIG.CATEGORY_LABELS[category]
             pop = pop_by_category.get(label, 0)
             pct = category_pcts.get(label, 0)
@@ -811,7 +835,7 @@ class StreamlitApp:
         """Render accessibility summary cards"""
         st.markdown("### Summary")
 
-        categories = ['excellent', 'good', 'fair', 'poor']
+        categories = ['excellent', 'good', 'fair', 'moderate', 'poor', 'very_poor']
         for category in categories:
             label = CONFIG.CATEGORY_LABELS[category]
             pop = pop_by_category.get(label, 0)
@@ -853,7 +877,7 @@ class StreamlitApp:
         """Render POI statistics table"""
         display_df = poi_df[
             ['POI', 'Avg Time (weighted)', 'Total Population',
-             'Excellent (%)', 'Good (%)', 'Fair (%)', 'Poor (%)']
+             'Excellent (%)', 'Good (%)', 'Fair (%)', 'Moderate (%)', 'Poor (%)', 'Very Poor (%)']
         ].copy()
 
         st.dataframe(
@@ -863,7 +887,9 @@ class StreamlitApp:
                 'Excellent (%)': '{:.1f}%',
                 'Good (%)': '{:.1f}%',
                 'Fair (%)': '{:.1f}%',
-                'Poor (%)': '{:.1f}%'
+                'Moderate (%)': '{:.1f}%',  # NEW
+                'Poor (%)': '{:.1f}%',
+                'Very Poor (%)': '{:.1f}%'  # NEW
             }).background_gradient(subset=['Avg Time (weighted)'], cmap='RdYlGn_r'),
             hide_index=True,
             use_container_width=True,
@@ -1258,7 +1284,7 @@ class StreamlitApp:
             y=top_15['POI'],
             x=top_15['Trip_Need_Rate_%'],
             orientation='h',
-            marker_color='#3498db',
+            marker_color=CONFIG.COLORS['poor'],
             text=top_15['Trip_Need_Rate_%'].round(1),
             texttemplate='%{text:.1f}%',
             textposition='inside',
@@ -1517,7 +1543,7 @@ class StreamlitApp:
         if total_pop > 0:
             fig_access = go.Figure()
 
-            categories = ['excellent', 'good', 'fair', 'poor']
+            categories = ['excellent', 'good', 'fair', 'moderate', 'poor', 'very_poor']
             category_labels = [CONFIG.CATEGORY_LABELS[cat] for cat in categories]
             colors = [CONFIG.COLORS[cat] for cat in categories]
 
@@ -1606,22 +1632,30 @@ class StreamlitApp:
             if total_pop_unit > 0:
                 excellent = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] <= 30][
                                 'Poblacion_Origen'].sum() / total_pop_unit * 100
-                good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) &
-                                 (zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
+                good = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 30) & (
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 45)][
                            'Poblacion_Origen'].sum() / total_pop_unit * 100
-                fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) &
-                                 (zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
+                fair = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 45) & (
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 60)][
                            'Poblacion_Origen'].sum() / total_pop_unit * 100
-                poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 60][
-                           'Poblacion_Origen'].sum() / total_pop_unit * 100
+                moderate = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 60) & (
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 75)][
+                               'Poblacion_Origen'].sum() / total_pop_unit * 100  # NEW
+                poor = zone_best[(zone_best['Tiempo_Viaje_Total_Minutos'] > 75) & (
+                            zone_best['Tiempo_Viaje_Total_Minutos'] <= 90)][
+                           'Poblacion_Origen'].sum() / total_pop_unit * 100  # UPDATED
+                very_poor = zone_best[zone_best['Tiempo_Viaje_Total_Minutos'] > 90][
+                                'Poblacion_Origen'].sum() / total_pop_unit * 100  # NEW
             else:
-                excellent = good = fair = poor = 0
+                excellent = good = fair = moderate = poor = very_poor = 0
 
             mask = analysis['Geographic Unit'] == unit
             analysis.loc[mask, 'Excellent (%)'] = excellent
             analysis.loc[mask, 'Good (%)'] = good
             analysis.loc[mask, 'Fair (%)'] = fair
+            analysis.loc[mask, 'Moderate (%)'] = moderate  # NEW
             analysis.loc[mask, 'Poor (%)'] = poor
+            analysis.loc[mask, 'Very Poor (%)'] = very_poor  # NEW
 
         return analysis
 
@@ -1668,9 +1702,10 @@ class StreamlitApp:
 
         fig_access = go.Figure()
 
-        categories = ['Excellent (%)', 'Good (%)', 'Fair (%)', 'Poor (%)']
-        colors = ['#2ecc71', '#f1c40f', '#e67e22', '#e74c3c']
-        labels = ['🟢 Excellent', '🟡 Good', '🟠 Fair', '🔴 Poor']
+        categories = ['Excellent (%)', 'Good (%)', 'Fair (%)', 'Moderate (%)', 'Poor (%)', 'Very Poor (%)']
+        colors = [CONFIG.COLORS['excellent'], CONFIG.COLORS['good'], CONFIG.COLORS['fair'],
+                  CONFIG.COLORS['moderate'], CONFIG.COLORS['poor'], CONFIG.COLORS['very_poor']]
+        labels = ['🟢 Excellent', '🟡 Good', '🟠 Fair', '🔶 Moderate', '🔴 Poor', '⚫ Very Poor']
 
         for cat, color, label in zip(categories, colors, labels):
             fig_access.add_trace(go.Bar(
@@ -1714,8 +1749,7 @@ class StreamlitApp:
         columns = ['Geographic Unit', 'Total Population', 'Avg Travel Time', 'Avg Transfers', 'Zones']
         if include_municipalities:
             columns.append('Municipalities')
-        columns.extend(['Excellent (%)', 'Good (%)', 'Fair (%)', 'Poor (%)'])
-
+        columns.extend(['Excellent (%)', 'Good (%)', 'Fair (%)', 'Moderate (%)', 'Poor (%)', 'Very Poor (%)'])
         display_df = analysis[columns]
 
         format_dict = {
@@ -1726,7 +1760,9 @@ class StreamlitApp:
             'Excellent (%)': '{:.1f}%',
             'Good (%)': '{:.1f}%',
             'Fair (%)': '{:.1f}%',
-            'Poor (%)': '{:.1f}%'
+            'Moderate (%)': '{:.1f}%',  # NEW
+            'Poor (%)': '{:.1f}%',
+            'Very Poor (%)': '{:.1f}%'  # NEW
         }
 
         if include_municipalities:
