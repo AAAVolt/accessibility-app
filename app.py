@@ -18,7 +18,7 @@ import io
 import re
 
 st.set_page_config(page_title="Análisis Mejorado de Accesibilidad del Transporte Público", layout="wide")
-st.title("🚌 Análisis Mejorado de Accesibilidad del Transporte Público")
+st.title("🚌 Análisis Mejorado de Accesibilidad del Transporte Público ")
 
 # Upload files
 uploaded_skim_file = st.file_uploader("Subir archivo CSV de matriz de tiempos", type=["csv"], key="skim")

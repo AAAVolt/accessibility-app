@@ -1,397 +1,680 @@
+import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+import plotly.graph_objects as go
+import plotly.express as px
 from datetime import datetime, timedelta
 import numpy as np
-import streamlit as st
-from io import BytesIO
-import openpyxl
+import re
+
+# Set page configuration
+st.set_page_config(
+    page_title="VISUM Journey Timetable Visualizer",
+    page_icon="🚌",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 
-class TimetableGraphGenerator:
-    def __init__(self):
-        self.df = None
-        self.stations = {}
-
-    def load_excel_file(self, file_path_or_buffer):
-        """Load Excel file and process the data"""
+def parse_time_string(time_str):
+    """Convert time string to minutes since midnight for plotting"""
+    if pd.isna(time_str) or time_str == '' or time_str is None:
+        return None
+    try:
+        # Handle HH:MM:SS format
+        time_str = str(time_str).strip()
+        time_obj = datetime.strptime(time_str, '%H:%M:%S')
+        return time_obj.hour * 60 + time_obj.minute + time_obj.second / 60
+    except (ValueError, AttributeError):
         try:
-            # Read the Excel file
-            self.df = pd.read_excel(file_path_or_buffer, sheet_name='Vehicle journeys')
+            # Try HH:MM format as fallback
+            time_obj = datetime.strptime(time_str, '%H:%M')
+            return time_obj.hour * 60 + time_obj.minute
+        except (ValueError, AttributeError):
+            return None
 
-            # Clean column names (remove potential extra characters)
-            self.df.columns = [col.split(':')[-1].strip() if ':' in str(col) else str(col).strip()
-                               for col in self.df.columns]
 
-            # Handle datetime conversion more carefully
-            # The Excel dates might be in different formats
-            for col in ['Dep', 'Arr']:
-                if col in self.df.columns:
-                    # Try different approaches to convert datetime
-                    if self.df[col].dtype == 'object':
-                        # If it's already a string, try to parse it
-                        self.df[col] = pd.to_datetime(self.df[col], errors='coerce')
-                    elif 'timedelta' in str(self.df[col].dtype):
-                        # If it's a timedelta, convert to datetime by adding to a base date
-                        base_date = pd.Timestamp('1899-12-30')  # Excel's base date
-                        self.df[col] = base_date + self.df[col]
-                    else:
-                        # Try direct conversion
-                        self.df[col] = pd.to_datetime(self.df[col], errors='coerce')
+def minutes_to_time_str(minutes):
+    """Convert minutes since midnight back to HH:MM format"""
+    if pd.isna(minutes):
+        return ""
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    return f"{hours:02d}:{mins:02d}"
 
-            # Extract time components for plotting
-            self.df['dep_time'] = self.df['Dep'].dt.time
-            self.df['arr_time'] = self.df['Arr'].dt.time
 
-            # Convert times to minutes from midnight for easier plotting
-            self.df['dep_minutes'] = (self.df['Dep'].dt.hour * 60 +
-                                      self.df['Dep'].dt.minute +
-                                      self.df['Dep'].dt.second / 60)
-            self.df['arr_minutes'] = (self.df['Arr'].dt.hour * 60 +
-                                      self.df['Arr'].dt.minute +
-                                      self.df['Arr'].dt.second / 60)
+def load_stop_grouping(grouping_file):
+    """Load stop grouping configuration from CSV"""
+    try:
+        group_df = pd.read_csv(grouping_file, sep=';', encoding='utf-8-sig')
+        group_df.columns = group_df.columns.str.strip()
 
-            # Create station mapping from identifiers
-            self._create_station_mapping()
+        # Expected columns: StopPointNo, GroupName, GroupOrder (optional)
+        if 'StopPointNo' in group_df.columns and 'GroupName' in group_df.columns:
+            # Convert to numeric to handle different data types
+            group_df['StopPointNo'] = pd.to_numeric(group_df['StopPointNo'], errors='coerce')
 
-            # Debug: Print column names and first few rows
-            st.write("Debug - Column names:", list(self.df.columns))
-            st.write("Debug - First row:", self.df.iloc[0].to_dict())
+            # Create mapping from stop number to group
+            stop_to_group = dict(zip(group_df['StopPointNo'], group_df['GroupName']))
+            # Remove any NaN keys
+            stop_to_group = {k: v for k, v in stop_to_group.items() if pd.notna(k)}
 
-            return True
+            # Create group ordering if available
+            group_order = {}
+            if 'GroupOrder' in group_df.columns:
+                for _, row in group_df.iterrows():
+                    if pd.notna(row['StopPointNo']) and pd.notna(row['GroupOrder']):
+                        group_name = row['GroupName']
+                        if group_name not in group_order:
+                            group_order[group_name] = row['GroupOrder']
 
-        except Exception as e:
-            st.error(f"Error loading file: {str(e)}")
-            import traceback
-            st.error(f"Full traceback: {traceback.format_exc()}")
-            return False
+            return stop_to_group, group_order
+        else:
+            st.error("Stop grouping file should contain 'StopPointNo' and 'GroupName' columns")
+            return None, None
+    except Exception as e:
+        st.error(f"Error loading stop grouping: {str(e)}")
+        return None, None
 
-    def _create_station_mapping(self):
-        """Create a mapping of station identifiers to positions"""
-        try:
-            # Extract unique station identifiers with safer column access
-            from_col = 'FromTProfItemIdentifier'
-            to_col = 'ToTProfItemIdentifier'
 
-            # Check if columns exist
-            if from_col not in self.df.columns or to_col not in self.df.columns:
-                st.warning(f"Station identifier columns not found. Available columns: {list(self.df.columns)}")
-                # Try alternative column names
-                possible_from_cols = [col for col in self.df.columns if
-                                      'from' in col.lower() or 'origin' in col.lower()]
-                possible_to_cols = [col for col in self.df.columns if 'to' in col.lower() or 'dest' in col.lower()]
+def load_stoplist(stoplist_file):
+    """Load stop list mapping from CSV"""
+    try:
+        stop_df = pd.read_csv(stoplist_file, sep=';', encoding='utf-8-sig')
+        stop_df.columns = stop_df.columns.str.strip()
 
-                if possible_from_cols and possible_to_cols:
-                    from_col = possible_from_cols[0]
-                    to_col = possible_to_cols[0]
-                    st.info(f"Using alternative columns: {from_col}, {to_col}")
+        # Create mapping from stop number to stop name
+        if 'No' in stop_df.columns and 'Name' in stop_df.columns:
+            # Convert to numeric to handle different data types
+            stop_df['No'] = pd.to_numeric(stop_df['No'], errors='coerce')
+            stop_mapping = dict(zip(stop_df['No'], stop_df['Name']))
+            # Remove any NaN keys
+            stop_mapping = {k: v for k, v in stop_mapping.items() if pd.notna(k)}
+            return stop_mapping
+        else:
+            st.error("Stop list file should contain 'No' and 'Name' columns")
+            return None
+    except Exception as e:
+        st.error(f"Error loading stop list: {str(e)}")
+        return None
+
+
+def load_and_process_data(uploaded_file, stop_mapping=None, stop_grouping=None, group_order=None):
+    """Load and process VISUM export data"""
+    try:
+        # Read the CSV file
+        df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8-sig')
+
+        # Clean column names (remove any BOM characters)
+        df.columns = df.columns.str.strip()
+
+        # Parse time columns
+        time_columns = ['Arr', 'Dep', 'ExtArrival', 'ExtDeparture']
+        for col in time_columns:
+            if col in df.columns:
+                df[f'{col}_minutes'] = df[col].apply(parse_time_string)
+
+        # Debug: Check for missing times
+        df['has_arrival'] = df['Arr_minutes'].notna()
+        df['has_departure'] = df['Dep_minutes'].notna()
+        df['has_any_time'] = df['has_arrival'] | df['has_departure']
+
+        missing_times = df[~df['has_any_time']]
+        if not missing_times.empty:
+            st.warning(f"Found {len(missing_times)} records without valid arrival or departure times")
+
+        # Get stop information - use StopPointNo as stop identifier
+        if 'StopPointNo' in df.columns:
+            df['stop_id'] = df['StopPointNo']
+
+            # Add stop grouping if available
+            if stop_grouping:
+                # Convert stop_id to numeric for matching
+                df['stop_id_numeric'] = pd.to_numeric(df['stop_id'], errors='coerce')
+                df['stop_group'] = df['stop_id_numeric'].map(stop_grouping)
+
+                # Count successful groupings
+                grouped_count = df['stop_group'].notna().sum()
+                total_records = len(df)
+                unique_stops = df['stop_id'].nunique()
+                grouped_unique_stops = df[df['stop_group'].notna()]['stop_id'].nunique()
+                unique_groups = df['stop_group'].nunique()
+
+                if grouped_count > 0:
+                    st.info(
+                        f"🏗️ Stop grouping: {grouped_unique_stops}/{unique_stops} stops grouped into {unique_groups} logical stations")
                 else:
-                    # Create simple numeric station positions based on route
-                    self.df['from_station_pos'] = 0
-                    self.df['to_station_pos'] = 1
-                    self.stations = {"Origin": 0, "Destination": 1}
-                    return
-
-            from_stations = self.df[from_col].dropna().unique()
-            to_stations = self.df[to_col].dropna().unique()
-
-            all_stations = list(set(list(from_stations) + list(to_stations)))
-            all_stations.sort()
-
-            # Create position mapping
-            self.stations = {station: i for i, station in enumerate(all_stations)}
-
-            # Add station positions to dataframe
-            self.df['from_station_pos'] = self.df[from_col].map(self.stations)
-            self.df['to_station_pos'] = self.df[to_col].map(self.stations)
-
-            # Fill NaN values with 0 (fallback)
-            self.df['from_station_pos'] = self.df['from_station_pos'].fillna(0)
-            self.df['to_station_pos'] = self.df['to_station_pos'].fillna(1)
-
-        except Exception as e:
-            st.warning(f"Error creating station mapping: {str(e)}")
-            # Fallback: create simple positions
-            self.df['from_station_pos'] = 0
-            self.df['to_station_pos'] = 1
-            self.stations = {"Origin": 0, "Destination": 1}
-
-    def get_available_lines(self):
-        """Get list of available line names"""
-        if self.df is None:
-            return []
-
-        # Try to find line name column
-        line_col = None
-        for col in self.df.columns:
-            if 'line' in col.lower() and 'name' in col.lower():
-                line_col = col
-                break
-
-        if line_col is None:
-            # Try just 'line'
-            for col in self.df.columns:
-                if 'line' in col.lower():
-                    line_col = col
-                    break
-
-        if line_col is None:
-            return []
-
-        return sorted(self.df[line_col].dropna().unique())
-
-    def generate_timetable_graph(self, selected_lines=None, direction_filter=None):
-        """Generate the timetable graph (string diagram)"""
-        if self.df is None:
-            st.error("No data loaded. Please upload an Excel file first.")
-            return None
-
-        # Filter data
-        filtered_df = self.df.copy()
-
-        if selected_lines:
-            line_col = 'LineName'
-            if line_col not in filtered_df.columns:
-                # Try to find alternative line column
-                possible_line_cols = [col for col in filtered_df.columns if 'line' in col.lower()]
-                if possible_line_cols:
-                    line_col = possible_line_cols[0]
-                    st.info(f"Using line column: {line_col}")
-                else:
-                    st.warning("No line name column found")
-                    return None
-
-            filtered_df = filtered_df[filtered_df[line_col].isin(selected_lines)]
-
-        if direction_filter is not None:
-            dir_col = 'DirectionCode'
-            if dir_col in filtered_df.columns:
-                filtered_df = filtered_df[filtered_df[dir_col] == direction_filter]
-
-        if filtered_df.empty:
-            st.warning("No data matches the selected filters.")
-            return None
-
-        # Ensure we have the required columns
-        required_cols = ['from_station_pos', 'to_station_pos', 'dep_minutes', 'arr_minutes']
-        missing_cols = [col for col in required_cols if col not in filtered_df.columns]
-        if missing_cols:
-            st.error(f"Missing required columns: {missing_cols}")
-            return None
-
-        # Create the plot
-        fig, ax = plt.subplots(figsize=(14, 10))
-
-        # Get line column name
-        line_col = 'LineName' if 'LineName' in filtered_df.columns else \
-        [col for col in filtered_df.columns if 'line' in col.lower()][0]
-
-        # Color mapping for different lines
-        unique_lines = filtered_df[line_col].unique()
-        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_lines)))
-        color_map = dict(zip(unique_lines, colors))
-
-        # Plot each journey as a line
-        for idx, row in filtered_df.iterrows():
-            line_name = row[line_col]
-            color = color_map[line_name]
-
-            # Plot the journey line
-            if pd.notna(row['from_station_pos']) and pd.notna(row['to_station_pos']):
-                x_coords = [row['dep_minutes'], row['arr_minutes']]
-                y_coords = [row['from_station_pos'], row['to_station_pos']]
-
-                ax.plot(x_coords, y_coords, color=color, alpha=0.7, linewidth=2,
-                        label=line_name if line_name not in ax.get_legend_handles_labels()[1] else "")
-
-        # Customize the plot
-        ax.set_xlabel('Time of Day', fontsize=12)
-        ax.set_ylabel('Station Position', fontsize=12)
-        ax.set_title('Timetable Graph (String Diagram)', fontsize=14, fontweight='bold')
-
-        # Format x-axis to show time
-        time_ticks = range(0, 24 * 60, 60)  # Every hour
-        time_labels = [f"{h:02d}:00" for h in range(24)]
-        ax.set_xticks(time_ticks)
-        ax.set_xticklabels(time_labels, rotation=45)
-
-        # Set y-axis to show station names (simplified)
-        if self.stations:
-            station_names = list(self.stations.keys())
-            station_positions = list(self.stations.values())
-
-            # Limit to reasonable number of station labels
-            if len(station_names) > 20:
-                step = max(1, len(station_names) // 10)
-                ax.set_yticks(station_positions[::step])
-                ax.set_yticklabels([name.split()[-1][:15] for name in station_names[::step]], fontsize=8)
+                    st.warning(f"⚠️ No stop IDs matched the grouping configuration")
             else:
-                ax.set_yticks(station_positions)
-                ax.set_yticklabels([name.split()[-1][:15] for name in station_names], fontsize=8)
+                df['stop_group'] = None
 
-        # Add grid
-        ax.grid(True, alpha=0.3)
+            # Add stop names if mapping is available
+            if stop_mapping:
+                # Convert stop_id to numeric for matching
+                if 'stop_id_numeric' not in df.columns:
+                    df['stop_id_numeric'] = pd.to_numeric(df['stop_id'], errors='coerce')
+                df['stop_name'] = df['stop_id_numeric'].map(stop_mapping)
 
-        # Add legend
-        if len(unique_lines) > 1:
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+                # Count successful mappings
+                mapped_count = df['stop_name'].notna().sum()
+                total_records = len(df)
+                unique_stops = df['stop_id'].nunique()
+                mapped_unique_stops = df[df['stop_name'].notna()]['stop_id'].nunique()
 
-        plt.tight_layout()
-        return fig
+                # Create display names
+                if stop_grouping:
+                    # Prioritize group names, then stop names, then stop IDs
+                    df['stop_display'] = df.apply(lambda row:
+                                                  row['stop_group'] if pd.notna(row['stop_group'])
+                                                  else (f"{row['stop_name']} ({row['stop_id']})" if pd.notna(
+                                                      row['stop_name'])
+                                                        else str(row['stop_id'])), axis=1)
+                else:
+                    df['stop_display'] = df.apply(lambda row:
+                                                  f"{row['stop_name']} ({row['stop_id']})" if pd.notna(row['stop_name'])
+                                                  else str(row['stop_id']), axis=1)
 
-    def get_data_summary(self):
-        """Get summary statistics of the loaded data"""
-        if self.df is None:
+                # Show mapping statistics
+                if mapped_count > 0:
+                    st.info(
+                        f"📍 Stop mapping: {mapped_unique_stops}/{unique_stops} unique stops mapped ({mapped_count}/{total_records} records)")
+                else:
+                    st.warning(
+                        f"⚠️ No stop IDs matched between journey data and stop list. Journey stops: {sorted(df['stop_id'].unique())[:10]}{'...' if unique_stops > 10 else ''}")
+            else:
+                if stop_grouping:
+                    # Use group names when available, otherwise stop IDs
+                    df['stop_display'] = df.apply(lambda row:
+                                                  row['stop_group'] if pd.notna(row['stop_group'])
+                                                  else str(row['stop_id']), axis=1)
+                else:
+                    df['stop_display'] = df['stop_id'].astype(str)
+        else:
+            st.error("Required column 'StopPointNo' not found in the data")
             return None
 
-        # Find line column dynamically
-        line_col = None
-        for col in self.df.columns:
-            if 'line' in col.lower():
-                line_col = col
-                break
+        # Determine direction based on journey patterns
+        # We'll analyze if journeys follow the same stop sequence or reverse
+        df = determine_journey_direction(df, group_order)
 
-        # Find direction column dynamically
-        dir_col = None
-        for col in self.df.columns:
-            if 'direction' in col.lower():
-                dir_col = col
-                break
+        return df
 
-        summary = {
-            'total_journeys': len(self.df),
-            'unique_lines': len(self.df[line_col].unique()) if line_col else 0,
-            'unique_stations': len(self.stations),
-            'time_range': f"{self.df['dep_time'].min()} - {self.df['arr_time'].max()}" if 'dep_time' in self.df.columns else "N/A",
-            'directions': sorted(self.df[dir_col].unique()) if dir_col else []
-        }
-        return summary
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        return None
+
+
+def determine_journey_direction(df, group_order=None):
+    """Determine if journeys are going in different directions"""
+    # Group by journey and get stop sequences
+    journey_sequences = {}
+
+    for journey_no in df['VehJourneyNo'].unique():
+        journey_data = df[df['VehJourneyNo'] == journey_no].sort_values('Index')
+        # Use grouped stops if available, otherwise individual stops
+        if 'stop_group' in df.columns and df['stop_group'].notna().any():
+            # Use groups for direction analysis, but only for grouped stops
+            stop_sequence = []
+            for _, row in journey_data.iterrows():
+                if pd.notna(row['stop_group']):
+                    stop_sequence.append(row['stop_group'])
+                else:
+                    stop_sequence.append(row['stop_id'])
+        else:
+            stop_sequence = journey_data['stop_id'].tolist()
+        journey_sequences[journey_no] = stop_sequence
+
+    # Find the most common sequence length and pattern
+    sequences = list(journey_sequences.values())
+    if not sequences:
+        df['direction'] = 'Direction 1'
+        return df
+
+    # Use the first journey as reference
+    reference_sequence = sequences[0]
+
+    # Compare other sequences to determine direction
+    df['direction'] = 'Direction 1'  # Default
+
+    for journey_no, sequence in journey_sequences.items():
+        # Simple heuristic: if sequence is reverse of reference, it's direction 2
+        if len(sequence) == len(reference_sequence):
+            if sequence == reference_sequence[::-1]:
+                df.loc[df['VehJourneyNo'] == journey_no, 'direction'] = 'Direction 2'
+            elif sequence != reference_sequence:
+                # Different pattern - could be direction 2
+                df.loc[df['VehJourneyNo'] == journey_no, 'direction'] = 'Direction 2'
+
+    return df
+
+
+def create_timetable_plot(df, selected_journeys=None, time_range=None, direction_filter=None):
+    """Create the main timetable visualization"""
+
+    # Filter data based on selections
+    filtered_df = df.copy()
+
+    if selected_journeys:
+        filtered_df = filtered_df[filtered_df['VehJourneyNo'].isin(selected_journeys)]
+
+    if direction_filter and direction_filter != 'All':
+        filtered_df = filtered_df[filtered_df['direction'] == direction_filter]
+
+    # Create the plot
+    fig = go.Figure()
+
+    # Get unique stops and sort them by first appearance or group order
+    stops_order = []
+    stop_display_mapping = {}
+
+    # If we have group ordering, use it to sort the stops
+    if 'stop_group' in filtered_df.columns and filtered_df['stop_group'].notna().any():
+        # Get unique display names (which are now group names or individual stops)
+        unique_displays = []
+        display_to_order = {}
+
+        for journey_no in filtered_df['VehJourneyNo'].unique():
+            journey_data = filtered_df[filtered_df['VehJourneyNo'] == journey_no].sort_values('Index')
+            for _, row in journey_data.iterrows():
+                display_name = row.get('stop_display', str(row['stop_id']))
+                if display_name not in unique_displays:
+                    unique_displays.append(display_name)
+                    # If this is a grouped stop, try to get its order
+                    if pd.notna(row.get('stop_group')) and hasattr(create_timetable_plot, 'group_order'):
+                        group_order = getattr(create_timetable_plot, 'group_order', {})
+                        if row['stop_group'] in group_order:
+                            display_to_order[display_name] = group_order[row['stop_group']]
+
+        # Sort by group order if available, otherwise keep discovery order
+        if display_to_order:
+            unique_displays.sort(key=lambda x: display_to_order.get(x, float('inf')))
+
+        stops_order = unique_displays
+        stop_display_mapping = {display: display for display in unique_displays}
+    else:
+        # Original logic for non-grouped stops
+        for journey_no in filtered_df['VehJourneyNo'].unique():
+            journey_data = filtered_df[filtered_df['VehJourneyNo'] == journey_no].sort_values('Index')
+            for _, row in journey_data.iterrows():
+                stop_id = row['stop_id']
+                if stop_id not in stops_order:
+                    stops_order.append(stop_id)
+                    stop_display_mapping[stop_id] = row.get('stop_display', str(stop_id))
+
+    # Create a mapping of stops to y-axis positions
+    if 'stop_group' in filtered_df.columns and filtered_df['stop_group'].notna().any():
+        # For grouped stops, map display names to positions
+        stop_positions = {display: i for i, display in enumerate(stops_order)}
+    else:
+        # For individual stops, map stop IDs to positions
+        stop_positions = {stop: i for i, stop in enumerate(stops_order)}
+
+    # Color mapping for directions
+    direction_colors = {
+        'Direction 1': '#1f77b4',  # Blue
+        'Direction 2': '#ff7f0e'  # Orange
+    }
+
+    # Plot each journey
+    for journey_no in filtered_df['VehJourneyNo'].unique():
+        journey_data = filtered_df[filtered_df['VehJourneyNo'] == journey_no].sort_values('Index')
+
+        if journey_data.empty:
+            continue
+
+        direction = journey_data['direction'].iloc[0]
+        color = direction_colors.get(direction, '#1f77b4')
+
+        # Extract times and stops for this journey
+        times = []
+        stops = []
+        hover_texts = []
+
+        for _, row in journey_data.iterrows():
+            # Use departure time if available, otherwise arrival time
+            # This ensures we capture terminal stops that only have arrival times
+            dep_time_val = row.get('Dep_minutes')
+            arr_time_val = row.get('Arr_minutes')
+
+            # Prefer departure time, but use arrival time if departure is not available
+            time_val = dep_time_val if pd.notna(dep_time_val) else arr_time_val
+
+            if time_val is not None and not pd.isna(time_val):
+                times.append(time_val)
+
+                # Use grouped stop display if available, otherwise individual stop
+                if 'stop_group' in filtered_df.columns and pd.notna(row.get('stop_group')):
+                    display_key = row.get('stop_display', str(row['stop_id']))
+                    stops.append(stop_positions[display_key])
+                else:
+                    stops.append(stop_positions[row['stop_id']])
+
+                # Create hover text
+                arr_time = minutes_to_time_str(row.get('Arr_minutes'))
+                dep_time = minutes_to_time_str(row.get('Dep_minutes'))
+                stop_display = row.get('stop_display', str(row['stop_id']))
+
+                hover_text = f"Journey: {journey_no}<br>"
+                hover_text += f"Stop: {stop_display}<br>"
+                if pd.notna(row.get('stop_group')):
+                    hover_text += f"Individual Stop: {row['stop_id']}<br>"
+                if arr_time:
+                    hover_text += f"Arrival: {arr_time}<br>"
+                if dep_time:
+                    hover_text += f"Departure: {dep_time}<br>"
+                else:
+                    hover_text += f"Terminal stop<br>"
+                hover_text += f"Direction: {direction}"
+                hover_texts.append(hover_text)
+
+        if times and stops:
+            # Add the journey line
+            fig.add_trace(go.Scatter(
+                x=times,
+                y=stops,
+                mode='lines+markers',
+                name=f'Journey {journey_no} ({direction})',
+                line=dict(color=color, width=2),
+                marker=dict(size=4, color=color),
+                hovertext=hover_texts,
+                hoverinfo='text',
+                showlegend=False
+            ))
+
+    # Apply time range filter if specified
+    if time_range:
+        start_minutes = time_range[0] * 60  # Convert hours to minutes
+        end_minutes = time_range[1] * 60
+        fig.update_xaxes(range=[start_minutes, end_minutes])
+
+    # Update layout
+    fig.update_layout(
+        title="Vehicle Journey Timetable",
+        xaxis_title="Time of Day",
+        yaxis_title="Stops",
+        height=max(600, len(stops_order) * 30),  # Dynamic height based on number of stops
+        hovermode='closest',
+        showlegend=True
+    )
+
+    # Format x-axis to show time labels
+    time_tickvals = list(range(0, 24 * 60, 60))  # Every hour
+    time_ticktext = [f"{h:02d}:00" for h in range(24)]
+
+    fig.update_xaxes(
+        tickvals=time_tickvals,
+        ticktext=time_ticktext,
+        tickangle=45
+    )
+
+    # Format y-axis to show stop names
+    if 'stop_group' in filtered_df.columns and filtered_df['stop_group'].notna().any():
+        stop_labels = stops_order  # stops_order already contains display names for grouped stops
+    else:
+        stop_labels = [stop_display_mapping.get(stop, str(stop)) for stop in stops_order]
+
+    fig.update_yaxes(
+        tickvals=list(range(len(stops_order))),
+        ticktext=stop_labels,
+        tickmode='array'
+    )
+
+    return fig
 
 
 def main():
-    st.set_page_config(page_title="Timetable Graph Generator", layout="wide")
+    st.title("🚌 VISUM Vehicle Journey Timetable Visualizer")
+    st.markdown("Upload a VISUM vehicle journey export CSV file to visualize public transport timetables")
 
-    st.title("🚇 Vehicle Journey Timetable Graph Generator")
-    st.markdown("Generate string diagrams (space-time diagrams) from vehicle journey data")
-
-    # Initialize the generator
-    if 'generator' not in st.session_state:
-        st.session_state.generator = TimetableGraphGenerator()
-
-    # Sidebar for file upload and controls
+    # Sidebar for controls
     with st.sidebar:
-        st.header("📁 Data Upload")
+        st.header("📁 File Upload")
         uploaded_file = st.file_uploader(
-            "Upload Excel file with vehicle journeys",
-            type=['xlsx', 'xls']
+            "Choose a VISUM Journey CSV file",
+            type=['csv'],
+            help="Upload a CSV file exported from VISUM containing vehicle journey data",
+            key="journey_file"
+        )
+
+        stoplist_file = st.file_uploader(
+            "Choose a Stop List CSV file (optional)",
+            type=['csv'],
+            help="Upload a CSV file with stop numbers and names for better labeling",
+            key="stoplist_file"
+        )
+
+        stop_grouping_file = st.file_uploader(
+            "Choose a Stop Grouping CSV file (optional)",
+            type=['csv'],
+            help="Upload a CSV file to group multiple stop points into single lines on the graph",
+            key="stop_grouping_file"
         )
 
         if uploaded_file is not None:
-            if st.session_state.generator.load_excel_file(uploaded_file):
-                st.success("✅ File loaded successfully!")
+            # Load stop grouping if provided
+            stop_grouping = None
+            group_order = None
+            if stop_grouping_file is not None:
+                with st.spinner("Loading stop grouping..."):
+                    stop_grouping, group_order = load_stop_grouping(stop_grouping_file)
+                if stop_grouping:
+                    st.success(
+                        f"✅ Loaded grouping for {len(stop_grouping)} stops into {len(set(stop_grouping.values()))} groups")
+                    # Show sample groupings
+                    sample_groups = list(set(stop_grouping.values()))[:3]
+                    st.caption(f"Sample groups: {', '.join(sample_groups)}")
+                else:
+                    st.error("Failed to load stop grouping")
 
-                # Show data summary
-                summary = st.session_state.generator.get_data_summary()
-                if summary:
-                    st.subheader("📊 Data Summary")
-                    st.write(f"**Total Journeys:** {summary['total_journeys']}")
-                    st.write(f"**Unique Lines:** {summary['unique_lines']}")
-                    st.write(f"**Stations:** {summary['unique_stations']}")
-                    st.write(f"**Time Range:** {summary['time_range']}")
-                    st.write(f"**Directions:** {summary['directions']}")
+            # Load stop mapping if provided
+            stop_mapping = None
+            if stoplist_file is not None:
+                with st.spinner("Loading stop list..."):
+                    stop_mapping = load_stoplist(stoplist_file)
+                if stop_mapping:
+                    st.success(f"✅ Loaded {len(stop_mapping)} stop names from stop list")
+                    # Show sample mappings
+                    sample_stops = list(stop_mapping.items())[:3]
+                    sample_text = ", ".join([f"{k}: {v[:30]}{'...' if len(v) > 30 else ''}" for k, v in sample_stops])
+                    st.caption(f"Sample mappings: {sample_text}")
+                else:
+                    st.error("Failed to load stop list")
 
-        # Controls section
-        if st.session_state.generator.df is not None:
-            st.header("🎛️ Graph Controls")
+            # Load and process data
+            with st.spinner("Processing journey data..."):
+                df = load_and_process_data(uploaded_file, stop_mapping, stop_grouping, group_order)
 
-            # Line selector
-            available_lines = st.session_state.generator.get_available_lines()
-            selected_lines = st.multiselect(
-                "Select Lines to Display",
-                options=available_lines,
-                default=available_lines[:3] if len(available_lines) > 3 else available_lines
-            )
+            # Store group_order for use in plotting function
+            if group_order:
+                create_timetable_plot.group_order = group_order
 
-            # Direction filter
-            dir_col = None
-            for col in st.session_state.generator.df.columns:
-                if 'direction' in col.lower():
-                    dir_col = col
-                    break
+            if df is not None:
+                st.success(f"✅ Loaded {len(df)} records from {df['VehJourneyNo'].nunique()} journeys")
 
-            if dir_col:
-                directions = sorted(st.session_state.generator.df[dir_col].unique())
-                direction_filter = st.selectbox(
-                    "Filter by Direction",
-                    options=[None] + list(directions),
-                    format_func=lambda x: "All Directions" if x is None else f"Direction {x}"
+                st.header("🎛️ Filters")
+
+                # Journey selection
+                all_journeys = sorted(df['VehJourneyNo'].unique())
+                selected_journeys = st.multiselect(
+                    "Select Journeys",
+                    options=all_journeys,
+                    default=all_journeys,  # Default to all journeys
+                    help="Select specific journeys to display (all selected by default)"
                 )
-            else:
-                direction_filter = None
 
-            # Generate graph button
-            if st.button("🔄 Generate Graph", type="primary"):
-                st.session_state.generate_graph = True
+                # Direction filter
+                directions = ['All'] + sorted(df['direction'].unique())
+                direction_filter = st.selectbox(
+                    "Direction",
+                    options=directions,
+                    help="Filter by journey direction"
+                )
+
+                # Time range filter
+                st.subheader("Time Range")
+                min_hour = 0
+                max_hour = 24
+
+                # Try to get actual time range from data
+                if 'Dep_minutes' in df.columns:
+                    valid_times = df['Dep_minutes'].dropna()
+                    if not valid_times.empty:
+                        min_hour = max(0, int(valid_times.min() // 60) - 1)
+                        max_hour = min(24, int(valid_times.max() // 60) + 2)
+
+                time_range = st.slider(
+                    "Select time range (hours)",
+                    min_value=0,
+                    max_value=24,
+                    value=(min_hour, max_hour),
+                    step=1,
+                    help="Filter the time axis display range"
+                )
+
+                # Data summary
+                st.header("📊 Data Summary")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Total Journeys", df['VehJourneyNo'].nunique())
+                    st.metric("Total Stops", df['stop_id'].nunique())
+                with col2:
+                    st.metric("Direction 1 Journeys",
+                              len(df[df['direction'] == 'Direction 1']['VehJourneyNo'].unique()))
+                    st.metric("Direction 2 Journeys",
+                              len(df[df['direction'] == 'Direction 2']['VehJourneyNo'].unique()))
 
     # Main content area
-    if st.session_state.generator.df is not None:
-        # Show sample data
-        with st.expander("📋 View Sample Data"):
-            st.dataframe(st.session_state.generator.df.head(10))
+    if uploaded_file is not None and 'df' in locals() and df is not None:
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["🗓️ Timetable Chart", "📋 Raw Data", "ℹ️ Instructions"])
 
-        # Generate and display graph
-        if 'generate_graph' in st.session_state and st.session_state.generate_graph:
-            with st.spinner("Generating timetable graph..."):
-                fig = st.session_state.generator.generate_timetable_graph(
-                    selected_lines=selected_lines if 'selected_lines' in locals() and selected_lines else None,
-                    direction_filter=direction_filter if 'direction_filter' in locals() else None
-                )
+        with tab1:
+            if selected_journeys:
+                fig = create_timetable_plot(df, selected_journeys, time_range, direction_filter)
+                st.plotly_chart(fig, use_container_width=True)
 
-                if fig is not None:
-                    st.pyplot(fig)
+                # Additional statistics
+                st.subheader("Selected Data Statistics")
+                filtered_df = df[df['VehJourneyNo'].isin(selected_journeys)]
+                if direction_filter and direction_filter != 'All':
+                    filtered_df = filtered_df[filtered_df['direction'] == direction_filter]
 
-                    # Download button for the plot
-                    buf = BytesIO()
-                    fig.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-                    buf.seek(0)
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Filtered Journeys", filtered_df['VehJourneyNo'].nunique())
+                with col2:
+                    st.metric("Filtered Stops", filtered_df['stop_id'].nunique())
+                with col3:
+                    valid_times = filtered_df['Dep_minutes'].dropna()
+                    if not valid_times.empty:
+                        earliest = minutes_to_time_str(valid_times.min())
+                        st.metric("Earliest Departure", earliest)
+                    else:
+                        st.metric("Earliest Departure", "N/A")
+                with col4:
+                    if not valid_times.empty:
+                        latest = minutes_to_time_str(valid_times.max())
+                        st.metric("Latest Departure", latest)
+                    else:
+                        st.metric("Latest Departure", "N/A")
+            else:
+                st.warning("Please select at least one journey to display the timetable.")
 
-                    st.download_button(
-                        label="📥 Download Graph as PNG",
-                        data=buf.getvalue(),
-                        file_name="timetable_graph.png",
-                        mime="image/png"
-                    )
+        with tab2:
+            st.subheader("Raw Data Preview")
+            st.dataframe(df, use_container_width=True)
+
+            # Download processed data
+            csv = df.to_csv(index=False)
+            st.download_button(
+                label="Download Processed Data as CSV",
+                data=csv,
+                file_name="processed_visum_data.csv",
+                mime="text/csv"
+            )
+
+        with tab3:
+            st.markdown("""
+            ## How to Use This App
+
+            ### 1. Data Upload
+            - Upload a CSV file exported from VISUM containing vehicle journey data
+            - Optionally upload a stop list CSV with stop numbers and names for better labeling
+            - Optionally upload a stop grouping CSV to combine multiple stop points into logical stations
+            - The journey file should contain columns like: VehJourneyNo, Index, Arr, Dep, StopPointNo
+            - The stop list file should contain columns: No, Name
+            - The stop grouping file should contain columns: StopPointNo, GroupName, GroupOrder (optional)
+
+            ### 2. Stop Grouping
+            - **Purpose**: Combine multiple physical stop points into single logical stations
+            - **Example**: Platform A (Stop 123) + Platform B (Stop 124) → "Central Station"
+            - **Benefits**: Cleaner visualization, logical station representation
+            - **Order**: Use GroupOrder column to control vertical arrangement of groups
+
+            ### 3. Visualization Features
+            - **X-axis**: Time of day (24-hour format)
+            - **Y-axis**: Stops or grouped stations (with names if provided)
+            - **Lines**: Each line represents one vehicle journey
+            - **Colors**: Different colors represent different directions
+            - **Grouping**: Multiple stop points appear as single lines when grouped
+
+            ### 4. Interactive Controls
+            - **Journey Selection**: Choose specific journeys to display
+            - **Direction Filter**: Filter by journey direction (useful for round-trips)
+            - **Time Range**: Focus on specific time periods
+            - **Hover**: Hover over points to see detailed information including individual stop IDs
+
+            ### 5. Data Processing
+            - The app automatically detects journey directions based on stop sequences
+            - Times are parsed from HH:MM:SS format
+            - Stop names are mapped from the stop list if provided
+            - Stop grouping combines multiple physical stops into logical stations
+            - Missing data is handled gracefully
+
+            ### 6. Export Options
+            - Download the processed data as CSV
+            - Use browser's print function to save charts as PDF
+
+            ### Supported File Formats
+            **Journey CSV** should be semicolon-separated with these key columns:
+            - `VehJourneyNo`: Journey identifier
+            - `Index`: Stop sequence within journey
+            - `Arr`: Arrival time (HH:MM:SS)
+            - `Dep`: Departure time (HH:MM:SS)
+            - `StopPointNo`: Stop identifier
+
+            **Stop List CSV** should be semicolon-separated with:
+            - `No`: Stop number (matches StopPointNo in journey data)
+            - `Name`: Stop name for display
+
+            **Stop Grouping CSV** should be semicolon-separated with:
+            - `StopPointNo`: Individual stop number (matches journey data)
+            - `GroupName`: Name of the logical station/group
+            - `GroupOrder`: (Optional) Number to control vertical order of groups in chart
+            """)
+
     else:
-        # Welcome message
-        st.info("👆 Please upload an Excel file with vehicle journey data to get started.")
-
-        # Instructions
+        # Show example and instructions when no file is uploaded
         st.markdown("""
-        ### 📖 Instructions
+        ## Welcome to the VISUM Timetable Visualizer! 🚌
 
-        1. **Upload your Excel file** using the sidebar uploader
-        2. **Select the lines** you want to visualize
-        3. **Choose direction filter** (optional)
-        4. **Generate the graph** to see your timetable diagram
+        This app helps you create beautiful, interactive timetable charts from VISUM vehicle journey exports.
 
-        ### 📋 Required Data Format
+        ### Features:
+        - 📊 **Interactive Timetables**: Visualize vehicle journeys with time on X-axis and stops on Y-axis
+        - 🏷️ **Stop Name Mapping**: Upload a stop list to show readable stop names instead of numbers
+        - 🔄 **Direction Detection**: Automatically identifies outbound and return journeys
+        - 🎛️ **Flexible Filtering**: Filter by journey, direction, and time range
+        - 📱 **Responsive Design**: Works on desktop and mobile devices
+        - 💾 **Data Export**: Download processed data for further analysis
 
-        Your Excel file should contain a sheet named "Vehicle journeys" with these columns:
-        - `Dep`: Departure time
-        - `Arr`: Arrival time  
-        - `LineName`: Name/ID of the transit line
-        - `DirectionCode`: Direction identifier (0, 1, etc.)
-        - `FromTProfItemIdentifier`: Origin station identifier
-        - `ToTProfItemIdentifier`: Destination station identifier
+        ### Getting Started:
+        1. Upload your VISUM journey CSV export using the first file uploader in the sidebar
+        2. Optionally upload a stop list CSV for better stop names using the second uploader
+        3. Use the filters to focus on specific journeys or time periods
+        4. Explore the interactive timetable chart
+        5. Export your results if needed
 
-        ### 🎯 What is a Timetable Graph?
-
-        A timetable graph (also known as a string diagram or space-time diagram) is a visual representation where:
-        - **X-axis**: Time of day
-        - **Y-axis**: Station positions along the route
-        - **Lines**: Each journey drawn as a line connecting departure and arrival points
-
-        This visualization is commonly used in railway operations to analyze schedules, identify conflicts, and optimize timetables.
+        **👈 Start by uploading files in the sidebar!**
         """)
 
 
