@@ -259,6 +259,62 @@ def create_timetable_plot(df, selected_journeys=None, time_range=None, direction
     if direction_filter and direction_filter != 'All':
         filtered_df = filtered_df[filtered_df['direction'] == direction_filter]
 
+    # Apply time range filter at the data level (exclude journeys outside time range)
+    if time_range:
+        if len(time_range) == 3:
+            start_minutes, end_minutes, is_cross_midnight = time_range
+        else:
+            start_minutes, end_minutes = time_range
+            is_cross_midnight = False
+
+        if is_cross_midnight:
+            # Cross-midnight case: include times >= start_minutes OR <= end_minutes
+            time_mask = (
+                    (filtered_df['Dep_minutes'] >= start_minutes) |
+                    (filtered_df['Dep_minutes'] <= end_minutes) |
+                    (filtered_df['Arr_minutes'] >= start_minutes) |
+                    (filtered_df['Arr_minutes'] <= end_minutes) |
+                    (filtered_df['Dep_minutes'].isna() &
+                     ((filtered_df['Arr_minutes'] >= start_minutes) | (filtered_df['Arr_minutes'] <= end_minutes))) |
+                    (filtered_df['Arr_minutes'].isna() &
+                     ((filtered_df['Dep_minutes'] >= start_minutes) | (filtered_df['Dep_minutes'] <= end_minutes)))
+            )
+        else:
+            # Same day case: include times between start and end
+            time_mask = (
+                    (filtered_df['Dep_minutes'].between(start_minutes, end_minutes, inclusive='both')) |
+                    (filtered_df['Arr_minutes'].between(start_minutes, end_minutes, inclusive='both')) |
+                    (filtered_df['Dep_minutes'].isna() & filtered_df['Arr_minutes'].between(start_minutes, end_minutes,
+                                                                                            inclusive='both')) |
+                    (filtered_df['Arr_minutes'].isna() & filtered_df['Dep_minutes'].between(start_minutes, end_minutes,
+                                                                                            inclusive='both'))
+            )
+
+        filtered_df = filtered_df[time_mask]
+
+        if filtered_df.empty:
+            # Return empty plot with message
+            fig = go.Figure()
+            if is_cross_midnight:
+                time_desc = f"({start_minutes // 60:02d}:{start_minutes % 60:02d} - {end_minutes // 60:02d}:{end_minutes % 60:02d} next day)"
+            else:
+                time_desc = f"({start_minutes // 60:02d}:{start_minutes % 60:02d} - {end_minutes // 60:02d}:{end_minutes % 60:02d})"
+
+            fig.add_annotation(
+                text=f"No journeys found in the selected time range<br>{time_desc}",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5,
+                showarrow=False,
+                font=dict(size=16)
+            )
+            fig.update_layout(
+                title="Vehicle Journey Timetable - No Data in Time Range",
+                xaxis_title="Time of Day",
+                yaxis_title="Stops",
+                height=400
+            )
+            return fig
+
     # Create the plot
     fig = go.Figure()
 
@@ -380,11 +436,72 @@ def create_timetable_plot(df, selected_journeys=None, time_range=None, direction
                 showlegend=False
             ))
 
-    # Apply time range filter if specified
+    # Apply time range for x-axis display (this is for visual range, data is already filtered)
     if time_range:
-        start_minutes = time_range[0] * 60  # Convert hours to minutes
-        end_minutes = time_range[1] * 60
-        fig.update_xaxes(range=[start_minutes, end_minutes])
+        if len(time_range) == 3:
+            start_minutes, end_minutes, is_cross_midnight = time_range
+        else:
+            start_minutes, end_minutes = time_range
+            is_cross_midnight = False
+
+        if is_cross_midnight:
+            # For cross-midnight, we need to show two ranges: start to 24:00 and 00:00 to end
+            # We'll extend the x-axis to show 24+ hours
+            extended_end = end_minutes + 24 * 60  # Add 24 hours to end time
+            fig.update_xaxes(range=[start_minutes, extended_end])
+
+            # Create custom ticks that show both day 1 and day 2 times
+            tick_interval = 60  # 1 hour intervals
+            if (extended_end - start_minutes) <= 180:  # Less than 3 hours total
+                tick_interval = 30
+            elif (extended_end - start_minutes) <= 360:  # Less than 6 hours total
+                tick_interval = 60
+            else:
+                tick_interval = 120
+
+            time_tickvals = []
+            time_ticktext = []
+
+            # First part: from start_minutes to end of day
+            current_time = start_minutes
+            while current_time < 24 * 60:
+                time_tickvals.append(current_time)
+                time_ticktext.append(f"{int(current_time // 60):02d}:{int(current_time % 60):02d}")
+                current_time += tick_interval
+
+            # Second part: from start of next day to end_minutes (shown as 24+ hours)
+            current_time = 24 * 60  # Start of next day
+            while current_time <= extended_end:
+                time_tickvals.append(current_time)
+                actual_hour = int((current_time - 24 * 60) // 60)
+                actual_minute = int((current_time - 24 * 60) % 60)
+                time_ticktext.append(f"{actual_hour:02d}:{actual_minute:02d}+1")  # +1 indicates next day
+                current_time += tick_interval
+        else:
+            # Normal same-day range
+            fig.update_xaxes(range=[start_minutes, end_minutes])
+
+            # Create custom time ticks for the selected range
+            tick_interval = 60  # 1 hour intervals
+            if end_minutes - start_minutes <= 180:  # Less than 3 hours
+                tick_interval = 30  # 30 minute intervals
+            elif end_minutes - start_minutes <= 360:  # Less than 6 hours
+                tick_interval = 60  # 1 hour intervals
+            else:
+                tick_interval = 120  # 2 hour intervals
+
+            time_tickvals = list(range(int(start_minutes), int(end_minutes + 1), tick_interval))
+            time_ticktext = [f"{int(t // 60):02d}:{int(t % 60):02d}" for t in time_tickvals]
+    else:
+        # Default full day view
+        time_tickvals = list(range(0, 24 * 60, 60))  # Every hour
+        time_ticktext = [f"{h:02d}:00" for h in range(24)]
+
+    fig.update_xaxes(
+        tickvals=time_tickvals,
+        ticktext=time_ticktext,
+        tickangle=45
+    )
 
     # Update layout
     fig.update_layout(
@@ -394,16 +511,6 @@ def create_timetable_plot(df, selected_journeys=None, time_range=None, direction
         height=max(600, len(stops_order) * 30),  # Dynamic height based on number of stops
         hovermode='closest',
         showlegend=True
-    )
-
-    # Format x-axis to show time labels
-    time_tickvals = list(range(0, 24 * 60, 60))  # Every hour
-    time_ticktext = [f"{h:02d}:00" for h in range(24)]
-
-    fig.update_xaxes(
-        tickvals=time_tickvals,
-        ticktext=time_ticktext,
-        tickangle=45
     )
 
     # Format y-axis to show stop names
@@ -511,24 +618,83 @@ def main():
 
                 # Time range filter
                 st.subheader("Time Range")
+
+                # Get actual time range from data for better defaults
                 min_hour = 0
                 max_hour = 24
+                min_minute = 0
+                max_minute = 0
 
-                # Try to get actual time range from data
                 if 'Dep_minutes' in df.columns:
                     valid_times = df['Dep_minutes'].dropna()
                     if not valid_times.empty:
-                        min_hour = max(0, int(valid_times.min() // 60) - 1)
-                        max_hour = min(24, int(valid_times.max() // 60) + 2)
+                        min_time_minutes = valid_times.min()
+                        max_time_minutes = valid_times.max()
+                        min_hour = max(0, int(min_time_minutes // 60))
+                        max_hour = min(24, int(max_time_minutes // 60) + 1)
+                        min_minute = int(min_time_minutes % 60)
+                        max_minute = int(max_time_minutes % 60)
 
-                time_range = st.slider(
-                    "Select time range (hours)",
-                    min_value=0,
-                    max_value=24,
-                    value=(min_hour, max_hour),
-                    step=1,
-                    help="Filter the time axis display range"
+                # Time filtering mode selection
+                time_filter_mode = st.radio(
+                    "Time Filter Mode",
+                    options=["Full Day", "Custom Range"],
+                    help="Choose how to filter the time display"
                 )
+
+                if time_filter_mode == "Custom Range":
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.write("**Start Time**")
+                        start_hour = st.selectbox(
+                            "Hour",
+                            options=list(range(24)),
+                            index=min_hour,
+                            key="start_hour"
+                        )
+                        start_minute = st.selectbox(
+                            "Minute",
+                            options=[0, 15, 30, 45],
+                            index=0,
+                            key="start_minute"
+                        )
+
+                    with col2:
+                        st.write("**End Time**")
+                        end_hour = st.selectbox(
+                            "Hour",
+                            options=list(range(24)),
+                            index=max_hour if max_hour < 24 else 23,
+                            key="end_hour"
+                        )
+                        end_minute = st.selectbox(
+                            "Minute",
+                            options=[0, 15, 30, 45],
+                            index=3,  # Default to 45 minutes
+                            key="end_minute"
+                        )
+
+                    # Convert to minutes for internal use
+                    start_time_minutes = start_hour * 60 + start_minute
+                    end_time_minutes = end_hour * 60 + end_minute
+
+                    # Handle cross-midnight ranges
+                    if start_time_minutes > end_time_minutes:
+                        # Cross-midnight case (e.g., 22:00 to 01:00)
+                        st.info(
+                            f"📅 Cross-midnight range: {start_hour:02d}:{start_minute:02d} to {end_hour:02d}:{end_minute:02d} (next day)")
+                        time_range = (start_time_minutes, end_time_minutes,
+                                      True)  # Third parameter indicates cross-midnight
+                    elif start_time_minutes == end_time_minutes:
+                        st.warning("⚠️ Start and end times cannot be the same")
+                        time_range = None
+                    else:
+                        time_range = (start_time_minutes, end_time_minutes, False)  # Same day
+                        st.info(
+                            f"📅 Showing journeys from {start_hour:02d}:{start_minute:02d} to {end_hour:02d}:{end_minute:02d}")
+                else:
+                    time_range = None
 
                 # Data summary
                 st.header("📊 Data Summary")
@@ -554,17 +720,54 @@ def main():
 
                 # Additional statistics
                 st.subheader("Selected Data Statistics")
-                filtered_df = df[df['VehJourneyNo'].isin(selected_journeys)]
+                display_df = df[df['VehJourneyNo'].isin(selected_journeys)]
                 if direction_filter and direction_filter != 'All':
-                    filtered_df = filtered_df[filtered_df['direction'] == direction_filter]
+                    display_df = display_df[display_df['direction'] == direction_filter]
+
+                # Apply same time filtering for statistics
+                if time_range:
+                    if len(time_range) == 3:
+                        start_minutes, end_minutes, is_cross_midnight = time_range
+                    else:
+                        start_minutes, end_minutes = time_range
+                        is_cross_midnight = False
+
+                    if is_cross_midnight:
+                        # Cross-midnight case
+                        time_mask = (
+                                (display_df['Dep_minutes'] >= start_minutes) |
+                                (display_df['Dep_minutes'] <= end_minutes) |
+                                (display_df['Arr_minutes'] >= start_minutes) |
+                                (display_df['Arr_minutes'] <= end_minutes) |
+                                (display_df['Dep_minutes'].isna() &
+                                 ((display_df['Arr_minutes'] >= start_minutes) | (
+                                             display_df['Arr_minutes'] <= end_minutes))) |
+                                (display_df['Arr_minutes'].isna() &
+                                 ((display_df['Dep_minutes'] >= start_minutes) | (
+                                             display_df['Dep_minutes'] <= end_minutes)))
+                        )
+                    else:
+                        # Same day case
+                        time_mask = (
+                                (display_df['Dep_minutes'].between(start_minutes, end_minutes, inclusive='both')) |
+                                (display_df['Arr_minutes'].between(start_minutes, end_minutes, inclusive='both')) |
+                                (display_df['Dep_minutes'].isna() & display_df['Arr_minutes'].between(start_minutes,
+                                                                                                      end_minutes,
+                                                                                                      inclusive='both')) |
+                                (display_df['Arr_minutes'].isna() & display_df['Dep_minutes'].between(start_minutes,
+                                                                                                      end_minutes,
+                                                                                                      inclusive='both'))
+                        )
+
+                    display_df = display_df[time_mask]
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Filtered Journeys", filtered_df['VehJourneyNo'].nunique())
+                    st.metric("Filtered Journeys", display_df['VehJourneyNo'].nunique())
                 with col2:
-                    st.metric("Filtered Stops", filtered_df['stop_id'].nunique())
+                    st.metric("Filtered Stops", display_df['stop_id'].nunique())
                 with col3:
-                    valid_times = filtered_df['Dep_minutes'].dropna()
+                    valid_times = display_df['Dep_minutes'].dropna()
                     if not valid_times.empty:
                         earliest = minutes_to_time_str(valid_times.min())
                         st.metric("Earliest Departure", earliest)
@@ -620,7 +823,8 @@ def main():
             ### 4. Interactive Controls
             - **Journey Selection**: Choose specific journeys to display
             - **Direction Filter**: Filter by journey direction (useful for round-trips)
-            - **Time Range**: Focus on specific time periods
+            - **Time Range**: Choose between full day or custom time range
+            - **Custom Time Range**: Select specific start and end times (excludes journeys outside this range)
             - **Hover**: Hover over points to see detailed information including individual stop IDs
 
             ### 5. Data Processing
