@@ -81,6 +81,9 @@ def compare_scenarios(df1, df2, dest_zone, zone_metadata=None):
     if merged.empty:
         return None, None
 
+    # Preserve the destination zone number (it's the same for all rows)
+    merged['DestZoneNo'] = dest_zone
+
     # Add zone metadata if available
     if zone_metadata is not None:
         # Add origin zone names and population
@@ -111,6 +114,55 @@ def compare_scenarios(df1, df2, dest_zone, zone_metadata=None):
         merged[f'{metric}_pct_change'] = ((merged[f'{metric}_scenario2'] - merged[f'{metric}_scenario1']) /
                                           merged[f'{metric}_scenario1'].replace(0, np.nan) * 100)
 
+    # Calculate population-weighted impact metrics
+    if zone_metadata is not None and 'OriginPopulation' in merged.columns:
+        # Fill missing population with 0 for calculation purposes
+        merged['OriginPopulation'] = merged['OriginPopulation'].fillna(0)
+
+        # Journey Time Impact Score: |time_change| * population
+        merged['JRT_impact_score'] = abs(merged['JRT_diff']) * merged['OriginPopulation']
+
+        # Journey Time Population-Minutes: time_change * population (preserves sign)
+        merged['JRT_population_minutes'] = merged['JRT_diff'] * merged['OriginPopulation']
+
+        # Distance Impact Score: |distance_change| * population
+        merged['JRD_impact_score'] = abs(merged['JRD_diff']) * merged['OriginPopulation']
+
+        # Service Quality Impact: Combines frequency and transfer changes weighted by population
+        sfq_change_normalized = merged['SFQ_pct_change'].fillna(0) / 100  # Convert to decimal
+        ntr_change_penalty = merged['NTR_diff'] * 10  # Weight transfer changes heavily (10 min penalty per transfer)
+        merged['service_quality_impact'] = (sfq_change_normalized - ntr_change_penalty) * merged['OriginPopulation']
+
+        # Overall Scenario Impact Score (negative means scenario 2 is better)
+        # Combines journey time (weight 1.0) + transfers penalty (weight 0.5)
+        merged['overall_impact_score'] = (
+                merged['JRT_population_minutes'] +
+                (merged['NTR_diff'] * merged['OriginPopulation'] * 5)  # 5 minutes penalty per additional transfer
+        )
+
+        # Best scenario indicator (per zone)
+        merged['best_scenario'] = merged['overall_impact_score'].apply(
+            lambda x: 'Scenario 2' if x < -30 else 'Scenario 1' if x > 30 else 'Similar'  # 30 pop-min threshold
+        )
+
+        # Impact category
+        def categorize_impact(score, pop):
+            if pop == 0:
+                return 'No Population Data'
+            abs_score = abs(score)
+            if abs_score < 1000:
+                return 'Low Impact'
+            elif abs_score < 10000:
+                return 'Medium Impact'
+            elif abs_score < 50000:
+                return 'High Impact'
+            else:
+                return 'Critical Impact'
+
+        merged['impact_category'] = merged.apply(
+            lambda row: categorize_impact(row['overall_impact_score'], row['OriginPopulation']), axis=1
+        )
+
     # Identify all zones with any changes (not just "significant" ones)
     changes = merged[
         (abs(merged['JRT_diff']) > 0.01) |  # Any journey time change > 0.01 min
@@ -120,8 +172,11 @@ def compare_scenarios(df1, df2, dest_zone, zone_metadata=None):
         (abs(merged['TWT_diff']) > 0.01)  # Any transfer wait time change > 0.01
         ].copy()
 
-    # Sort by absolute journey time change (descending)
-    changes = changes.sort_values(by='JRT_diff', key=abs, ascending=False)
+    # Sort by impact score if available, otherwise by absolute journey time change
+    if 'JRT_impact_score' in changes.columns:
+        changes = changes.sort_values(by='JRT_impact_score', ascending=False)
+    else:
+        changes = changes.sort_values(by='JRT_diff', key=abs, ascending=False)
 
     return merged, changes
 
@@ -313,7 +368,7 @@ def create_difference_chart(comparison_df, dest_zone):
 
 
 def create_population_analysis_chart(changes_df):
-    """Create chart showing relationship between population and changes"""
+    """Create basic chart showing relationship between population and changes (fallback)"""
 
     if changes_df.empty or 'OriginPopulation' not in changes_df.columns:
         return None
@@ -354,6 +409,138 @@ def create_population_analysis_chart(changes_df):
     fig.add_hline(y=0, line_dash="dash", line_color="black")
 
     return fig
+
+
+def create_population_impact_chart(changes_df):
+    """Create chart showing population-weighted impact analysis"""
+
+    if changes_df.empty or 'JRT_impact_score' not in changes_df.columns:
+        return None
+
+    # Filter out zones without population data
+    impact_data = changes_df.dropna(subset=['OriginPopulation'])
+    impact_data = impact_data[impact_data['OriginPopulation'] > 0]
+
+    if impact_data.empty:
+        return None
+
+    # Create bubble chart: x=population, y=journey_time_change, size=impact_score
+    fig = go.Figure()
+
+    # Color by best scenario
+    colors = {'Scenario 1': 'red', 'Scenario 2': 'green', 'Similar': 'orange'}
+
+    # Calculate bubble sizes with better scaling
+    max_impact = impact_data['JRT_impact_score'].max()
+    min_impact = impact_data['JRT_impact_score'].min()
+
+    for scenario in impact_data['best_scenario'].unique():
+        scenario_data = impact_data[impact_data['best_scenario'] == scenario]
+
+        # Scale bubble sizes between 8 and 40 pixels
+        bubble_sizes = 8 + (scenario_data['JRT_impact_score'] / max_impact * 32) if max_impact > 0 else [15] * len(
+            scenario_data)
+
+        fig.add_trace(go.Scatter(
+            x=scenario_data['OriginPopulation'],
+            y=scenario_data['JRT_diff'],
+            mode='markers',
+            marker=dict(
+                size=bubble_sizes,
+                color=colors.get(scenario, 'gray'),
+                opacity=0.7,
+                line=dict(width=2, color='white'),
+                sizemin=8
+            ),
+            name=f'Best: {scenario}',
+            text=scenario_data['OriginZoneName'] if 'OriginZoneName' in scenario_data.columns else scenario_data[
+                'OrigZoneNo'],
+            hovertemplate='<b>%{text}</b><br>' +
+                          'Population: %{x:,.0f}<br>' +
+                          'Journey Time Change: %{y:.1f} min<br>' +
+                          'Impact Score: %{customdata:,.0f}<br>' +
+                          '<extra></extra>',
+            customdata=scenario_data['JRT_impact_score']
+        ))
+
+    fig.update_layout(
+        title='Population Impact Analysis: Journey Time Changes',
+        xaxis_title='Zone Population',
+        yaxis_title='Journey Time Change (minutes)',
+        height=600,
+        showlegend=True,
+        hovermode='closest'
+    )
+
+    # Add horizontal line at 0
+    fig.add_hline(y=0, line_dash="dash", line_color="black", line_width=1)
+
+    # Add annotations
+    fig.add_annotation(
+        text="Bubble size = Impact Score<br>(|Time Change| × Population)",
+        xref="paper", yref="paper",
+        x=0.02, y=0.98,
+        showarrow=False,
+        font=dict(size=10),
+        bgcolor="rgba(255,255,255,0.8)",
+        bordercolor="black",
+        borderwidth=1
+    )
+
+    return fig
+
+
+def calculate_scenario_summary(comparison_df):
+    """Calculate overall scenario comparison summary"""
+
+    if comparison_df.empty or 'overall_impact_score' not in comparison_df.columns:
+        return None
+
+    # Filter zones with population data
+    pop_data = comparison_df.dropna(subset=['OriginPopulation'])
+    pop_data = pop_data[pop_data['OriginPopulation'] > 0]
+
+    if pop_data.empty:
+        return None
+
+    # Calculate summary metrics
+    total_population = pop_data['OriginPopulation'].sum()
+
+    # Total population-minutes impact (negative = scenario 2 better)
+    total_impact = pop_data['overall_impact_score'].sum()
+
+    # Average impact per person
+    avg_impact_per_person = total_impact / total_population if total_population > 0 else 0
+
+    # Population breakdown by best scenario
+    scenario_breakdown = pop_data.groupby('best_scenario')['OriginPopulation'].sum()
+
+    # High impact zones count
+    high_impact_zones = len(pop_data[pop_data['impact_category'].isin(['High Impact', 'Critical Impact'])])
+
+    # Best overall scenario determination
+    if total_impact < -1000:  # Significant improvement in scenario 2
+        overall_best = "Scenario 2"
+        improvement_desc = f"improves travel by {abs(avg_impact_per_person):.1f} minutes per person on average"
+    elif total_impact > 1000:  # Significant improvement in scenario 1
+        overall_best = "Scenario 1"
+        improvement_desc = f"is {avg_impact_per_person:.1f} minutes per person better than Scenario 2"
+    else:
+        overall_best = "Similar Performance"
+        improvement_desc = "shows minimal difference in overall travel impact"
+
+    summary = {
+        'total_population': total_population,
+        'total_impact_score': total_impact,
+        'avg_impact_per_person': avg_impact_per_person,
+        'overall_best_scenario': overall_best,
+        'improvement_description': improvement_desc,
+        'scenario_breakdown': scenario_breakdown,
+        'high_impact_zones': high_impact_zones,
+        'total_zones_analyzed': len(pop_data)
+    }
+
+    return summary
 
 
 def main():
@@ -521,6 +708,68 @@ def main():
                             delta=f"{avg_transfer_change:.2f}"
                         )
 
+                    # Population impact summary if available
+                    if zone_metadata is not None and 'overall_impact_score' in comparison_df.columns:
+                        scenario_summary = calculate_scenario_summary(comparison_df)
+
+                        if scenario_summary:
+                            st.subheader("🎯 Population Impact Analysis")
+
+                            # Overall recommendation
+                            col1, col2, col3 = st.columns(3)
+
+                            with col1:
+                                best_scenario = scenario_summary['overall_best_scenario']
+                                if best_scenario == "Scenario 2":
+                                    st.success(f"**Recommended: {best_scenario}**")
+                                elif best_scenario == "Scenario 1":
+                                    st.error(f"**Recommended: {best_scenario}**")
+                                else:
+                                    st.info(f"**Result: {best_scenario}**")
+
+                                st.caption(scenario_summary['improvement_description'])
+
+                            with col2:
+                                total_pop = scenario_summary['total_population']
+                                st.metric(
+                                    "Total Population Analyzed",
+                                    f"{total_pop:,.0f}",
+                                    delta=f"{scenario_summary['total_zones_analyzed']} zones"
+                                )
+
+                            with col3:
+                                avg_impact = scenario_summary['avg_impact_per_person']
+                                st.metric(
+                                    "Avg Impact per Person",
+                                    f"{avg_impact:.1f} min",
+                                    delta="Scenario 2 vs 1"
+                                )
+
+                            # Population breakdown by best scenario
+                            if 'scenario_breakdown' in scenario_summary and not scenario_summary[
+                                'scenario_breakdown'].empty:
+                                st.subheader("📊 Population Distribution by Best Scenario")
+
+                                breakdown_df = scenario_summary['scenario_breakdown'].reset_index()
+                                breakdown_df.columns = ['Best Scenario', 'Population']
+                                breakdown_df['Percentage'] = (
+                                            breakdown_df['Population'] / breakdown_df['Population'].sum() * 100).round(
+                                    1)
+
+                                # Create pie chart
+                                fig_pie = px.pie(
+                                    breakdown_df,
+                                    values='Population',
+                                    names='Best Scenario',
+                                    title='Population Distribution by Best Performing Scenario',
+                                    color='Best Scenario',
+                                    color_discrete_map={'Scenario 1': 'red', 'Scenario 2': 'green', 'Similar': 'orange'}
+                                )
+                                st.plotly_chart(fig_pie, use_container_width=True)
+
+                                # Show breakdown table
+                                st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+
                     # Charts
                     st.subheader("📈 Scenario Comparison Charts")
 
@@ -535,7 +784,24 @@ def main():
                         st.plotly_chart(difference_chart, use_container_width=True)
 
                     # Population analysis if available
-                    if zone_metadata is not None and 'OriginPopulation' in changes.columns:
+                    if zone_metadata is not None and 'JRT_impact_score' in changes.columns:
+                        st.subheader("👥 Population Impact Analysis")
+                        impact_chart = create_population_impact_chart(changes)
+                        if impact_chart:
+                            st.plotly_chart(impact_chart, use_container_width=True)
+
+                            st.markdown("""
+                            **Chart Explanation:**
+                            - **Bubble size** represents the impact score (|time change| × population)
+                            - **Color** indicates which scenario performs better for each zone
+                            - **X-axis** shows zone population
+                            - **Y-axis** shows journey time change (negative = improvement in Scenario 2)
+                            """)
+                        else:
+                            st.info("No population data available for impact analysis")
+
+                    # Regular population chart as fallback
+                    elif zone_metadata is not None and 'OriginPopulation' in changes.columns:
                         st.subheader("👥 Population vs Journey Time Changes")
                         pop_chart = create_population_analysis_chart(changes)
                         if pop_chart:
@@ -545,31 +811,99 @@ def main():
 
                     # Changes table
                     if not changes.empty:
-                        st.subheader("📋 Zones with Changes")
+                        st.subheader("📋 Zones with Changes - Comparison Table")
 
-                        # Select relevant columns for display
-                        if zone_metadata is not None:
-                            display_cols = ['OriginZoneName', 'OrigZoneNo', 'OriginPopulation',
-                                            'JRT_scenario1', 'JRT_scenario2', 'JRT_diff', 'JRT_pct_change',
-                                            'JRD_scenario1', 'JRD_scenario2', 'JRD_diff', 'JRD_pct_change',
-                                            'NTR_scenario1', 'NTR_scenario2', 'NTR_diff']
-                            column_names = ['Zone Name', 'Zone No', 'Population',
-                                            'JT S1', 'JT S2', 'JT Diff', 'JT Change %',
-                                            'JD S1', 'JD S2', 'JD Diff', 'JD Change %',
-                                            'Transfers S1', 'Transfers S2', 'Transfer Diff']
+                        # Select relevant columns for display based on what's available
+                        base_cols = ['OrigZoneNo', 'JRT_scenario1', 'JRT_scenario2', 'JRT_diff', 'JRT_pct_change']
+                        base_names = ['Zone No', 'JT S1', 'JT S2', 'JT Diff', 'JT Change %']
+
+                        display_cols = base_cols.copy()
+                        column_names = base_names.copy()
+
+                        # Add zone name and population if available
+                        if 'OriginZoneName' in changes.columns:
+                            display_cols.insert(0, 'OriginZoneName')
+                            column_names.insert(0, 'Zone Name')
+
+                        if 'OriginPopulation' in changes.columns:
+                            insert_pos = 2 if 'OriginZoneName' in changes.columns else 1
+                            display_cols.insert(insert_pos, 'OriginPopulation')
+                            column_names.insert(insert_pos, 'Population')
+
+                        # Add distance metrics
+                        if 'JRD_scenario1' in changes.columns:
+                            display_cols.extend(['JRD_scenario1', 'JRD_scenario2', 'JRD_diff', 'JRD_pct_change'])
+                            column_names.extend(['JD S1', 'JD S2', 'JD Diff', 'JD Change %'])
+
+                        # Add transfer metrics
+                        if 'NTR_scenario1' in changes.columns:
+                            display_cols.extend(['NTR_scenario1', 'NTR_scenario2', 'NTR_diff'])
+                            column_names.extend(['Transfers S1', 'Transfers S2', 'Transfer Diff'])
+
+                        # Add impact metrics if available
+                        if 'JRT_impact_score' in changes.columns:
+                            display_cols.extend(['JRT_impact_score', 'best_scenario', 'impact_category'])
+                            column_names.extend(['Impact Score', 'Best Scenario', 'Impact Level'])
+
+                        # Filter to only include columns that actually exist
+                        existing_cols = [col for col in display_cols if col in changes.columns]
+                        existing_names = [column_names[i] for i, col in enumerate(display_cols) if
+                                          col in changes.columns]
+
+                        if not existing_cols:
+                            st.error("No valid columns found for display")
+                            return
+
+                        # Create display dataframe with appropriate rounding
+                        display_df = changes[existing_cols].copy()
+
+                        # Apply different rounding based on column type
+                        for col in existing_cols:
+                            if col in ['JRT_scenario1', 'JRT_scenario2', 'JRT_diff', 'ACT', 'EGT', 'RIT', 'TWT']:
+                                # Time columns - 1 decimal place
+                                display_df[col] = display_df[col].round(1)
+                            elif col in ['JRD_scenario1', 'JRD_scenario2', 'JRD_diff', 'ACD', 'EGD', 'RID']:
+                                # Distance columns - 2 decimal places
+                                display_df[col] = display_df[col].round(2)
+                            elif col in ['JRT_pct_change', 'JRD_pct_change', 'SFQ']:
+                                # Percentage and frequency - 1 decimal place
+                                display_df[col] = display_df[col].round(1)
+                            elif col in ['NTR_scenario1', 'NTR_scenario2', 'NTR_diff']:
+                                # Transfer counts - no decimals
+                                display_df[col] = display_df[col].round(0).astype(int)
+                            elif col in ['OriginPopulation', 'JRT_impact_score']:
+                                # Population and impact scores - no decimals
+                                display_df[col] = display_df[col].round(0).astype(int)
+                            # Leave text columns (OriginZoneName, best_scenario, impact_category) as is
+
+                        display_df.columns = existing_names
+
+                        # Style the dataframe if impact metrics are available
+                        if 'Best Scenario' in display_df.columns:
+                            def highlight_best_scenario(val):
+                                if val == 'Scenario 2':
+                                    return 'background-color: lightgreen'
+                                elif val == 'Scenario 1':
+                                    return 'background-color: lightcoral'
+                                else:
+                                    return 'background-color: lightyellow'
+
+                            styled_df = display_df.style.applymap(
+                                highlight_best_scenario,
+                                subset=['Best Scenario']
+                            )
+                            st.dataframe(styled_df, use_container_width=True)
                         else:
-                            display_cols = ['OrigZoneNo', 'JRT_scenario1', 'JRT_scenario2', 'JRT_diff',
-                                            'JRT_pct_change',
-                                            'JRD_scenario1', 'JRD_scenario2', 'JRD_diff', 'JRD_pct_change',
-                                            'NTR_scenario1', 'NTR_scenario2', 'NTR_diff']
-                            column_names = ['Zone No', 'JT S1', 'JT S2', 'JT Diff', 'JT Change %',
-                                            'JD S1', 'JD S2', 'JD Diff', 'JD Change %',
-                                            'Transfers S1', 'Transfers S2', 'Transfer Diff']
+                            st.dataframe(display_df, use_container_width=True)
 
-                        display_df = changes[display_cols].round(2)
-                        display_df.columns = column_names
-
-                        st.dataframe(display_df, use_container_width=True)
+                        # Explanation of impact metrics
+                        if 'Impact Score' in display_df.columns:
+                            st.markdown("""
+                            **Impact Metrics Explanation:**
+                            - **Impact Score**: |Journey Time Change| × Population (higher = more people affected)
+                            - **Best Scenario**: Which scenario performs better for this zone
+                            - **Impact Level**: Categorization based on total impact magnitude
+                            """)
 
                         # Download button for changes
                         csv_buffer = io.StringIO()
@@ -580,6 +914,127 @@ def main():
                             file_name=f"changes_dest_{selected_dest_zone}.csv",
                             mime="text/csv"
                         )
+
+                        # Raw scenario data tables
+                        st.subheader("📄 Raw Scenario Data for Changed Zones")
+
+                        # Create tabs for the two scenarios
+                        tab1, tab2 = st.tabs(["📊 Scenario 1 Data", "📊 Scenario 2 Data"])
+
+                        # Prepare scenario data columns
+                        scenario1_cols = ['OrigZoneNo']
+                        scenario2_cols = ['OrigZoneNo']
+                        scenario1_names = ['Origin Zone No']
+                        scenario2_names = ['Origin Zone No']
+
+                        # Add DestZoneNo if it exists
+                        if 'DestZoneNo_scenario1' in changes.columns:
+                            scenario1_cols.append('DestZoneNo_scenario1')
+                            scenario1_names.append('Dest Zone No')
+                        elif 'DestZoneNo' in changes.columns:
+                            scenario1_cols.append('DestZoneNo')
+                            scenario1_names.append('Dest Zone No')
+
+                        if 'DestZoneNo_scenario2' in changes.columns:
+                            scenario2_cols.append('DestZoneNo_scenario2')
+                            scenario2_names.append('Dest Zone No')
+                        elif 'DestZoneNo' in changes.columns:
+                            scenario2_cols.append('DestZoneNo')
+                            scenario2_names.append('Dest Zone No')
+
+                        # Add zone name if available
+                        if 'OriginZoneName' in changes.columns:
+                            scenario1_cols.insert(0, 'OriginZoneName')
+                            scenario2_cols.insert(0, 'OriginZoneName')
+                            scenario1_names.insert(0, 'Origin Zone Name')
+                            scenario2_names.insert(0, 'Origin Zone Name')
+
+                        # Add destination zone name if available
+                        if 'DestinationZoneName' in changes.columns:
+                            dest_pos = len(scenario1_cols)
+                            scenario1_cols.insert(dest_pos, 'DestinationZoneName')
+                            scenario2_cols.insert(dest_pos, 'DestinationZoneName')
+                            scenario1_names.insert(dest_pos, 'Dest Zone Name')
+                            scenario2_names.insert(dest_pos, 'Dest Zone Name')
+
+                        # Add all available scenario 1 metrics
+                        all_metrics = ['ACD', 'ACT', 'EGD', 'EGT', 'JRD', 'JRT', 'NTR', 'RID', 'RIT', 'SFQ', 'TWT']
+                        for metric in all_metrics:
+                            s1_col = f'{metric}_scenario1'
+                            s2_col = f'{metric}_scenario2'
+                            if s1_col in changes.columns:
+                                scenario1_cols.append(s1_col)
+                                scenario1_names.append(metric)
+                            if s2_col in changes.columns:
+                                scenario2_cols.append(s2_col)
+                                scenario2_names.append(metric)
+
+                        def format_scenario_data(df, cols, names):
+                            """Format scenario data with appropriate decimal places"""
+                            # Filter to only existing columns
+                            existing_cols = [col for col in cols if col in df.columns]
+                            existing_names = [names[i] for i, col in enumerate(cols) if col in df.columns]
+
+                            if not existing_cols:
+                                return pd.DataFrame()  # Return empty dataframe if no columns exist
+
+                            scenario_df = df[existing_cols].copy()
+
+                            for col in existing_cols:
+                                # Only process numeric columns
+                                if pd.api.types.is_numeric_dtype(scenario_df[col]):
+                                    if any(time_metric in col for time_metric in ['ACT', 'EGT', 'JRT', 'RIT', 'TWT']):
+                                        # Time columns - 1 decimal place
+                                        scenario_df[col] = scenario_df[col].round(1)
+                                    elif any(dist_metric in col for dist_metric in ['ACD', 'EGD', 'JRD', 'RID']):
+                                        # Distance columns - 2 decimal places
+                                        scenario_df[col] = scenario_df[col].round(2)
+                                    elif 'SFQ' in col:
+                                        # Service frequency - 1 decimal place
+                                        scenario_df[col] = scenario_df[col].round(1)
+                                    elif 'NTR' in col:
+                                        # Transfer counts - no decimals
+                                        scenario_df[col] = scenario_df[col].round(0).astype(int)
+                                    elif col in ['OrigZoneNo'] or 'DestZoneNo' in col:
+                                        # Zone numbers - no decimals
+                                        scenario_df[col] = scenario_df[col].round(0).astype(int)
+                                # Leave text/object columns as is (zone names, etc.)
+
+                            scenario_df.columns = existing_names
+                            return scenario_df
+
+                        with tab1:
+                            st.markdown("**Complete O-D data for Scenario 1 (baseline) for all zones with changes:**")
+                            scenario1_df = format_scenario_data(changes, scenario1_cols, scenario1_names)
+                            st.dataframe(scenario1_df, use_container_width=True)
+
+                            # Download button for scenario 1
+                            csv_buffer_s1 = io.StringIO()
+                            scenario1_df.to_csv(csv_buffer_s1, index=False)
+                            st.download_button(
+                                label="📥 Download Scenario 1 Data",
+                                data=csv_buffer_s1.getvalue(),
+                                file_name=f"scenario1_data_dest_{selected_dest_zone}.csv",
+                                mime="text/csv",
+                                key="download_s1"
+                            )
+
+                        with tab2:
+                            st.markdown(
+                                "**Complete O-D data for Scenario 2 (alternative) for all zones with changes:**")
+                            scenario2_df = format_scenario_data(changes, scenario2_cols, scenario2_names)
+                            st.dataframe(scenario2_df, use_container_width=True)
+
+                            # Download button for scenario 2
+                            csv_buffer_s2 = io.StringIO()
+                            scenario2_df.to_csv(csv_buffer_s2, index=False)
+                            st.download_button(
+                                label="📥 Download Scenario 2 Data",
+                                data=csv_buffer_s2.getvalue(),
+                                file_name=f"scenario2_data_dest_{selected_dest_zone}.csv",
+                                mime="text/csv",
+                                key="download_s2"
+                            )
 
                     else:
                         st.info("No zones with changes above the specified threshold.")
