@@ -370,77 +370,142 @@ class StreamlitApp:
         """Render travel time distribution analysis"""
         st.markdown("## ⏱️ Travel Time Distribution Analysis")
 
-        # Population-weighted distribution
-        zone_best = analyzer.get_zone_best_access()
-
-        if zone_best.empty:
-            st.error("No data available for travel time distribution")
-            return
-
         col1, col2 = st.columns(2)
 
         with col1:
             st.markdown("### Population-Weighted Distribution")
-
-            try:
-                # Create population-weighted histogram using numpy
-                times = zone_best['Tiempo_Total_Minutos'].values
-                weights = zone_best['Poblacion'].values
-
-                # Filter out any NaN or infinite values
-                valid_mask = np.isfinite(times) & np.isfinite(weights) & (weights > 0)
-                times = times[valid_mask]
-                weights = weights[valid_mask]
-
-                if len(times) == 0:
-                    st.warning("No valid data for population-weighted distribution")
-                else:
-                    # Create bins
-                    hist, bins = np.histogram(times, bins=20, weights=weights)
-                    bin_centers = (bins[:-1] + bins[1:]) / 2
-
-                    fig_weighted = go.Figure(data=[go.Bar(
-                        x=bin_centers,
-                        y=hist,
-                        name="Population"
-                    )])
-
-                    fig_weighted.update_layout(
-                        title="Travel Time Distribution (Population-Weighted)",
-                        xaxis_title="Travel Time (minutes)",
-                        yaxis_title="Population",
-                        height=500
-                    )
-
-                    st.plotly_chart(fig_weighted, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error creating population-weighted chart: {str(e)}")
+            fig_weighted = self._create_travel_time_distribution(analyzer)
+            st.plotly_chart(fig_weighted, use_container_width=True)
 
         with col2:
             st.markdown("### Distribution by Zones")
+            fig_zones = self._create_travel_time_by_zones_chart(analyzer)
+            st.plotly_chart(fig_zones, use_container_width=True)
 
-            try:
-                # Create histogram by zones
-                fig_zones = px.histogram(
-                    zone_best,
-                    x='Tiempo_Total_Minutos',
-                    nbins=20,
-                    title="Travel Time Distribution by Zones"
-                )
+    def _create_travel_time_distribution(self, analyzer: AccessibilityAnalyzer) -> go.Figure:
+        """Create travel time distribution with KDE overlay"""
+        df = analyzer.df
+        zone_populations = analyzer.zone_populations
+        total_population = analyzer.total_population
 
-                fig_zones.update_layout(
-                    xaxis_title="Travel Time (minutes)",
-                    yaxis_title="Number of Zones",
-                    height=500
-                )
+        # Create bins
+        bins = np.linspace(df['Tiempo_Total_Minutos'].min(),
+                           df['Tiempo_Total_Minutos'].max(), 41)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
 
-                st.plotly_chart(fig_zones, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error creating zones chart: {str(e)}")
-                st.write("Debug info - zone_best shape:", zone_best.shape)
-                st.write("Debug info - columns:", list(zone_best.columns))
-                if not zone_best.empty:
-                    st.write("Debug info - sample data:", zone_best.head())
+        # Calculate population-weighted histogram
+        bin_populations = []
+        for i in range(len(bins) - 1):
+            mask = ((df['Tiempo_Total_Minutos'] >= bins[i]) &
+                    (df['Tiempo_Total_Minutos'] < bins[i + 1]))
+            zones_in_bin = df[mask]['Zona_Origen'].unique()
+            pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
+            bin_populations.append(pop_in_bin / total_population * 100)
+
+        fig = go.Figure()
+
+        # Add histogram
+        fig.add_trace(go.Bar(
+            x=bin_centers,
+            y=bin_populations,
+            marker_color='#EBEBEB',
+            width=(bins[1] - bins[0]) * 0.9,
+            showlegend=False
+        ))
+
+        # Add KDE curve
+        self._add_kde_curve(fig, df, bin_populations)
+
+        # Add reference lines
+        self._add_reference_lines(fig, analyzer)
+
+        return self.styler.apply_standard_styling(
+            fig, "Travel Time Distribution (Population-Weighted)",
+            "Total Travel Time (minutes)", "Percentage of Population (%)"
+        )
+
+    def _create_travel_time_by_zones_chart(self, analyzer: AccessibilityAnalyzer) -> go.Figure:
+        """Create travel time distribution by zones chart"""
+        zone_best = analyzer.get_zone_best_access()
+
+        fig = px.histogram(
+            zone_best,
+            x='Tiempo_Total_Minutos',
+            nbins=40,
+            histnorm='percent',
+            color_discrete_sequence=['#EBEBEB']
+        )
+
+        # Add KDE curve for zones
+        travel_times_zones = zone_best['Tiempo_Total_Minutos'].dropna()
+        if len(travel_times_zones) > 0:
+            kde = stats.gaussian_kde(travel_times_zones)
+            x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
+            y_kde = kde(x_range)
+            y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40
+
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_normalized,
+                mode='lines',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+            # Add reference lines with zone percentages
+            total_zones = len(zone_best)
+            zones_under_30_pct = (zone_best['Tiempo_Total_Minutos'] <= 30).sum() / total_zones * 100
+            zones_under_45_pct = (zone_best['Tiempo_Total_Minutos'] <= 45).sum() / total_zones * 100
+            zones_under_60_pct = (zone_best['Tiempo_Total_Minutos'] <= 60).sum() / total_zones * 100
+
+            fig.add_vline(x=30, line_dash="dash", line_color="green",
+                          annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)")
+            fig.add_vline(x=45, line_dash="dash", line_color="orange",
+                          annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)")
+            fig.add_vline(x=60, line_dash="dash", line_color="red",
+                          annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)")
+
+        return self.styler.apply_standard_styling(
+            fig, "Travel Time Distribution by Zones",
+            "Total Travel Time (minutes)", "Percentage of Zones (%)"
+        )
+
+    def _add_kde_curve(self, fig: go.Figure, df: pd.DataFrame, bin_populations: List[float]):
+        """Add KDE curve to histogram"""
+        travel_times_list = []
+        for _, row in df.iterrows():
+            travel_times_list.extend([row['Tiempo_Total_Minutos']] * int(row['Poblacion'] / 100))
+
+        if len(travel_times_list) > 0:
+            travel_times_weighted = np.array(travel_times_list)
+            kde = stats.gaussian_kde(travel_times_weighted)
+            x_range = np.linspace(df['Tiempo_Total_Minutos'].min(),
+                                  df['Tiempo_Total_Minutos'].max(), 200)
+            y_kde = kde(x_range)
+            y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
+
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_scaled,
+                mode='lines',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+    def _add_reference_lines(self, fig: go.Figure, analyzer: AccessibilityAnalyzer):
+        """Add reference lines for accessibility thresholds"""
+        pop_by_category, category_pcts = analyzer.get_population_by_category()
+
+        excellent_pct = category_pcts.get(CONFIG.CATEGORY_LABELS['excellent'], 0)
+        good_pct = excellent_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['good'], 0)
+        fair_pct = good_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['fair'], 0)
+
+        fig.add_vline(x=30, line_dash="dash", line_color="green",
+                      annotation_text=f"30 min ({excellent_pct:.1f}%)")
+        fig.add_vline(x=45, line_dash="dash", line_color="orange",
+                      annotation_text=f"45 min ({good_pct:.1f}%)")
+        fig.add_vline(x=60, line_dash="dash", line_color="red",
+                      annotation_text=f"60 min ({fair_pct:.1f}%)")
 
     def render_poi_analysis(self, analyzer: AccessibilityAnalyzer):
         """Render POI accessibility breakdown"""
