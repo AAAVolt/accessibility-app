@@ -370,17 +370,15 @@ class StreamlitApp:
         """Render travel time distribution analysis"""
         st.markdown("## ⏱️ Travel Time Distribution Analysis")
 
-        col1, col2 = st.columns(2)
+        st.markdown("### Population-Weighted Distribution")
+        fig_weighted = self._create_travel_time_distribution(analyzer)
+        st.plotly_chart(fig_weighted, use_container_width=True)
 
-        with col1:
-            st.markdown("### Population-Weighted Distribution")
-            fig_weighted = self._create_travel_time_distribution(analyzer)
-            st.plotly_chart(fig_weighted, use_container_width=True)
+        st.markdown("---")
 
-        with col2:
-            st.markdown("### Distribution by Zones")
-            fig_zones = self._create_travel_time_by_zones_chart(analyzer)
-            st.plotly_chart(fig_zones, use_container_width=True)
+        st.markdown("### Distribution by Zones")
+        fig_zones = self._create_travel_time_by_zones_chart(analyzer)
+        st.plotly_chart(fig_zones, use_container_width=True)
 
     def _create_travel_time_distribution(self, analyzer: AccessibilityAnalyzer) -> go.Figure:
         """Create travel time distribution with KDE overlay"""
@@ -457,13 +455,24 @@ class StreamlitApp:
             zones_under_30_pct = (zone_best['Tiempo_Total_Minutos'] <= 30).sum() / total_zones * 100
             zones_under_45_pct = (zone_best['Tiempo_Total_Minutos'] <= 45).sum() / total_zones * 100
             zones_under_60_pct = (zone_best['Tiempo_Total_Minutos'] <= 60).sum() / total_zones * 100
+            zones_under_75_pct = (zone_best['Tiempo_Total_Minutos'] <= 75).sum() / total_zones * 100
+            zones_under_90_pct = (zone_best['Tiempo_Total_Minutos'] <= 90).sum() / total_zones * 100
 
             fig.add_vline(x=30, line_dash="dash", line_color="green",
-                          annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)")
+                          annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)",
+                          annotation_position="top")
             fig.add_vline(x=45, line_dash="dash", line_color="orange",
-                          annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)")
+                          annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)",
+                          annotation_position="top")
             fig.add_vline(x=60, line_dash="dash", line_color="red",
-                          annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)")
+                          annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=75, line_dash="dash", line_color="darkred",
+                          annotation_text=f"75 min<br>({zones_under_75_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=90, line_dash="dash", line_color="maroon",
+                          annotation_text=f"90 min<br>({zones_under_90_pct:.1f}% zones)",
+                          annotation_position="top")
 
         return self.styler.apply_standard_styling(
             fig, "Travel Time Distribution by Zones",
@@ -499,13 +508,24 @@ class StreamlitApp:
         excellent_pct = category_pcts.get(CONFIG.CATEGORY_LABELS['excellent'], 0)
         good_pct = excellent_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['good'], 0)
         fair_pct = good_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['fair'], 0)
+        moderate_pct = fair_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['moderate'], 0)
+        poor_pct = moderate_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['poor'], 0)
 
         fig.add_vline(x=30, line_dash="dash", line_color="green",
-                      annotation_text=f"30 min ({excellent_pct:.1f}%)")
+                      annotation_text=f"30 min<br>({excellent_pct:.1f}%)",
+                      annotation_position="top")
         fig.add_vline(x=45, line_dash="dash", line_color="orange",
-                      annotation_text=f"45 min ({good_pct:.1f}%)")
+                      annotation_text=f"45 min<br>({good_pct:.1f}%)",
+                      annotation_position="top")
         fig.add_vline(x=60, line_dash="dash", line_color="red",
-                      annotation_text=f"60 min ({fair_pct:.1f}%)")
+                      annotation_text=f"60 min<br>({fair_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=75, line_dash="dash", line_color="darkred",
+                      annotation_text=f"75 min<br>({moderate_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=90, line_dash="dash", line_color="maroon",
+                      annotation_text=f"90 min<br>({poor_pct:.1f}%)",
+                      annotation_position="top")
 
     def render_poi_analysis(self, analyzer: AccessibilityAnalyzer):
         """Render POI accessibility breakdown"""
