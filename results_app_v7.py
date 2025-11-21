@@ -31,10 +31,7 @@ class AccessibilityConfig:
         'fair': '#FEE08B',
         'moderate': '#FDAE61',
         'poor': '#F46D43',
-        'very_poor': '#D73027',
-        'public_transport': '#1f77b4',
-        'private_transport': '#ff7f0e',
-        'difference': '#2ca02c'
+        'very_poor': '#D73027'
     }
 
     CATEGORY_LABELS = {
@@ -60,19 +57,10 @@ class AccessibilityAnalyzer:
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
         # Calculate total travel time in minutes
-        self.df['Tiempo_Total_Minutos'] = self.df['Tiempo_Viaje']  # Using Tiempo_Trayecto as total time
+        self.df['Tiempo_Total_Minutos'] = self.df['Tiempo_Trayecto']  # Using Tiempo_Trayecto as total time
 
         # Filter out zones with travel times > 999 minutes (unrealistic/invalid data)
         self.df = self.df[self.df['Tiempo_Total_Minutos'] <= 999]
-
-        # Check for private transport columns
-        self.has_private_transport = 'TT_Coche_NoPico' in self.df.columns and 'Distancia_km' in self.df.columns
-
-        if self.has_private_transport:
-            # Convert car travel time to minutes if needed
-            self.df['TT_Coche_Minutos'] = self.df['TT_Coche_NoPico']  # Assuming already in minutes
-            # Calculate time difference (positive means public transport is slower)
-            self.df['Diferencia_Tiempo'] = self.df['Tiempo_Total_Minutos'] - self.df['TT_Coche_Minutos']
 
         self.zone_populations = self._calculate_zone_populations()
         self.total_population = self.zone_populations.sum()
@@ -175,86 +163,42 @@ class AccessibilityAnalyzer:
         return zone_metrics[zone_metrics['Avg Travel Time'] > threshold].sort_values('Population', ascending=False)
 
     def get_transport_comparison(self) -> pd.DataFrame:
-        """Get comparison between public and private transport"""
-        if not self.has_private_transport:
+        """Calculate public vs private transport comparison by zone"""
+        if 'TT_Coche' not in self.df.columns:
             return pd.DataFrame()
 
-        comparison_data = []
-
-        for poi in self.df['Nombre_Destino'].unique():
-            poi_subset = self.df[self.df['Nombre_Destino'] == poi]
-            zone_data = poi_subset.groupby('Zona_Origen').agg({
-                'Poblacion': 'first',
-                'Tiempo_Total_Minutos': 'mean',
-                'TT_Coche_Minutos': 'mean',
-                'Distancia_km': 'mean',
-                'Diferencia_Tiempo': 'mean'
-            })
-
-            total_pop = zone_data['Poblacion'].sum()
-            if total_pop == 0:
-                continue
-
-            # Calculate weighted averages
-            weighted_public = (zone_data['Tiempo_Total_Minutos'] * zone_data['Poblacion']).sum() / total_pop
-            weighted_private = (zone_data['TT_Coche_Minutos'] * zone_data['Poblacion']).sum() / total_pop
-            weighted_distance = (zone_data['Distancia_km'] * zone_data['Poblacion']).sum() / total_pop
-            weighted_difference = (zone_data['Diferencia_Tiempo'] * zone_data['Poblacion']).sum() / total_pop
-
-            comparison_data.append({
-                'POI': poi,
-                'Public Transport (min)': weighted_public,
-                'Private Transport (min)': weighted_private,
-                'Distance (km)': weighted_distance,
-                'Time Difference (min)': weighted_difference,
-                'Total Population': total_pop
-            })
-
-        return pd.DataFrame(comparison_data).sort_values('Time Difference (min)', ascending=False)
-
-    def get_geographic_differences(self, geo_column: str) -> pd.DataFrame:
-        """Calculate geographic differences between public and private transport"""
-        if not self.has_private_transport:
-            return pd.DataFrame()
-
-        # Get zone-level data with geographic info
-        zone_geo = self.df[['Zona_Origen', geo_column]].drop_duplicates()
-        zone_transport = self.df.groupby('Zona_Origen').agg({
-            'Poblacion': 'first',
+        zone_comparison = self.df.groupby('Zona_Origen').agg({
             'Tiempo_Total_Minutos': 'mean',
-            'TT_Coche_Minutos': 'mean',
-            'Distancia_km': 'mean',
-            'Diferencia_Tiempo': 'mean'
+            'TT_Coche': 'mean',
+            'Poblacion': 'first',
+            'Nombre_Origen': 'first',
+            'Municipio': 'first',
+            'Comarca': 'first'
         }).reset_index()
 
-        analysis_data = zone_transport.merge(zone_geo, on='Zona_Origen')
+        zone_comparison['Difference'] = zone_comparison['Tiempo_Total_Minutos'] - zone_comparison['TT_Coche']
+        zone_comparison['Ratio'] = zone_comparison['Tiempo_Total_Minutos'] / zone_comparison['TT_Coche']
 
-        # Group by geographic unit and calculate weighted averages
-        geo_analysis = []
-        for geo_unit in analysis_data[geo_column].unique():
-            unit_data = analysis_data[analysis_data[geo_column] == geo_unit]
-            total_pop = unit_data['Poblacion'].sum()
+        return zone_comparison
 
-            if total_pop == 0:
-                continue
+def get_transport_comparison(self) -> pd.DataFrame:
+    """Calculate public vs private transport comparison by zone"""
+    if 'TT_Coche' not in self.df.columns:
+        return pd.DataFrame()
 
-            weighted_public = (unit_data['Tiempo_Total_Minutos'] * unit_data['Poblacion']).sum() / total_pop
-            weighted_private = (unit_data['TT_Coche_Minutos'] * unit_data['Poblacion']).sum() / total_pop
-            weighted_distance = (unit_data['Distancia_km'] * unit_data['Poblacion']).sum() / total_pop
-            weighted_difference = (unit_data['Diferencia_Tiempo'] * unit_data['Poblacion']).sum() / total_pop
+    zone_comparison = self.df.groupby('Zona_Origen').agg({
+        'Tiempo_Total_Minutos': 'mean',
+        'TT_Coche': 'mean',
+        'Poblacion': 'first',
+        'Nombre_Origen': 'first',
+        'Municipio': 'first',
+        'Comarca': 'first'
+    }).reset_index()
 
-            geo_analysis.append({
-                'Geographic Unit': geo_unit,
-                'Public Transport (min)': weighted_public,
-                'Private Transport (min)': weighted_private,
-                'Distance (km)': weighted_distance,
-                'Time Difference (min)': weighted_difference,
-                'Total Population': total_pop,
-                'Zones': len(unit_data)
-            })
+    zone_comparison['Difference'] = zone_comparison['Tiempo_Total_Minutos'] - zone_comparison['TT_Coche']
+    zone_comparison['Ratio'] = zone_comparison['Tiempo_Total_Minutos'] / zone_comparison['TT_Coche']
 
-        return pd.DataFrame(geo_analysis).sort_values('Time Difference (min)', ascending=False)
-
+    return zone_comparison
 
 # ============================================================================
 # VISUALIZATION CLASSES
@@ -281,379 +225,356 @@ class ChartStyler:
             height=height,
             width=width,
             margin=dict(l=200, r=100, t=100, b=80),
-            plot_bgcolor='white',
-            paper_bgcolor='white'
+            font=dict(size=16),
+            annotations=[dict(font=dict(size=16))] if fig.layout.annotations else []
         )
 
-        fig.update_xaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.2)',
-            zeroline=True,
-            zerolinewidth=1,
-            zerolinecolor='rgba(128,128,128,0.4)'
-        )
-
-        fig.update_yaxes(
-            showgrid=True,
-            gridwidth=1,
-            gridcolor='rgba(128,128,128,0.2)',
-            zeroline=True,
-            zerolinewidth=1,
-            zerolinecolor='rgba(128,128,128,0.4)'
+        fig.update_traces(
+            textfont=dict(size=16),
+            hoverlabel=dict(font=dict(size=16))
         )
 
         return fig
 
 
-class ExportManager:
-    """Handles data export functionality"""
+class MetricsCalculator:
+    """Calculate key accessibility metrics"""
 
-    @staticmethod
-    def generate_detailed_report(analyzer: AccessibilityAnalyzer) -> BytesIO:
-        """Generate comprehensive Excel report"""
-        output = BytesIO()
+    def __init__(self, analyzer: AccessibilityAnalyzer):
+        self.analyzer = analyzer
 
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Zone-level accessibility
-            zone_best = analyzer.get_zone_best_access()
-            zone_best.to_excel(writer, sheet_name='Zone_Accessibility', index=False)
+    def calculate_weighted_avg_time(self) -> float:
+        """Calculate population-weighted average travel time"""
+        zone_best = self.analyzer.get_zone_best_access()
+        if self.analyzer.total_population == 0:
+            return 0
+        return (zone_best['Tiempo_Total_Minutos'] * zone_best['Poblacion']).sum() / self.analyzer.total_population
 
-            # POI analysis
-            poi_analysis = analyzer.get_poi_accessibility()
-            poi_analysis.to_excel(writer, sheet_name='POI_Analysis', index=False)
+    def calculate_access_percentages(self) -> Dict[str, float]:
+        """Calculate percentage of population in each accessibility category"""
+        _, percentages = self.analyzer.get_population_by_category()
+        return percentages.to_dict() if not percentages.empty else {}
 
-            # Priority zones
-            priority_zones = analyzer.get_priority_zones()
-            priority_zones.to_excel(writer, sheet_name='Priority_Zones', index=False)
-
-            # Geographic analysis
-            if 'Municipio' in analyzer.df.columns:
-                muni_analysis = analyzer._calculate_geographic_analysis('Municipio', 'Municipality')
-                muni_analysis.to_excel(writer, sheet_name='Municipality_Analysis', index=False)
-
-            if 'Comarca' in analyzer.df.columns:
-                comarca_analysis = analyzer._calculate_geographic_analysis('Comarca', 'Comarca')
-                comarca_analysis.to_excel(writer, sheet_name='Comarca_Analysis', index=False)
-
-            # Transport comparison if available
-            if analyzer.has_private_transport:
-                transport_comparison = analyzer.get_transport_comparison()
-                transport_comparison.to_excel(writer, sheet_name='Transport_Comparison', index=False)
-
-                if 'Municipio' in analyzer.df.columns:
-                    muni_diff = analyzer.get_geographic_differences('Municipio')
-                    muni_diff.to_excel(writer, sheet_name='Municipality_Transport_Diff', index=False)
-
-                if 'Comarca' in analyzer.df.columns:
-                    comarca_diff = analyzer.get_geographic_differences('Comarca')
-                    comarca_diff.to_excel(writer, sheet_name='Comarca_Transport_Diff', index=False)
-
-            # Summary statistics
-            summary_stats = pd.DataFrame({
-                'Metric': [
-                    'Total Zones',
-                    'Total Population',
-                    'Average Travel Time (min)',
-                    'Population with Excellent Access (<30min)',
-                    'Population with Good Access (30-45min)',
-                    'Population with Poor Access (>75min)'
-                ],
-                'Value': [
-                    len(analyzer.zone_populations),
-                    analyzer.total_population,
-                    analyzer.df.groupby('Zona_Origen')['Tiempo_Total_Minutos'].min().mean(),
-                    zone_best[zone_best['Tiempo_Total_Minutos'] <= 30]['Poblacion'].sum(),
-                    zone_best[(zone_best['Tiempo_Total_Minutos'] > 30) &
-                              (zone_best['Tiempo_Total_Minutos'] <= 45)]['Poblacion'].sum(),
-                    zone_best[zone_best['Tiempo_Total_Minutos'] > 75]['Poblacion'].sum()
-                ]
-            })
-            summary_stats.to_excel(writer, sheet_name='Summary', index=False)
-
-        output.seek(0)
-        return output
+    def get_top_metrics(self) -> Dict:
+        """Get comprehensive top-level metrics"""
+        return {
+            'total_population': self.analyzer.total_population,
+            'avg_travel_time': self.calculate_weighted_avg_time(),
+            'access_percentages': self.calculate_access_percentages(),
+            'total_zones': len(self.analyzer.zone_populations)
+        }
 
 
 # ============================================================================
-# STREAMLIT APPLICATION
+# MAIN APPLICATION CLASS
 # ============================================================================
 
 class StreamlitApp:
-    """Main Streamlit application class"""
+    """Main Streamlit application"""
 
     def __init__(self):
         self.styler = ChartStyler()
-        self.exporter = ExportManager()
+        st.set_page_config(page_title="Accessibility Analysis - Simplified", layout="wide")
 
     def render_header(self):
         """Render application header"""
-        st.set_page_config(
-            page_title="Public Transport Accessibility Analysis",
-            page_icon="🚌",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
+        st.title("🚌 Transportation Accessibility Analysis - Simplified Version")
+        st.info(
+            "ℹ️ Note: Zones with travel times > 999 minutes are excluded from analysis as unrealistic/invalid data.")
+        st.markdown("---")
 
-        st.title("🚌 Public Transport Accessibility Analysis")
-        st.markdown("""
-        **Upload your accessibility analysis data to generate comprehensive insights about public transport coverage and performance.**
-
-        This tool analyzes:
-        - **Population accessibility** across different travel time thresholds
-        - **POI-specific performance** for different destinations
-        - **Geographic patterns** by municipality and comarca
-        - **Trip generation analysis** for service planning
-        - **Transport mode comparison** (when private transport data is available)
-        """)
-
-    def process_uploaded_file(self, uploaded_file) -> Tuple[
-        Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[AccessibilityAnalyzer]]:
-        """Process uploaded Excel file"""
+    def process_uploaded_file(self, uploaded_file) -> Tuple[pd.DataFrame, pd.DataFrame, AccessibilityAnalyzer]:
+        """Process the uploaded file and return necessary dataframes"""
         try:
-            # Read data
-            df_all = pd.read_excel(uploaded_file, engine='openpyxl')
-            st.success(f"✅ File loaded successfully! {len(df_all):,} records found.")
+            df = pd.read_excel(uploaded_file)
 
-            # Check required columns
-            required_columns = ['Zona_Origen', 'Nombre_Destino', 'Tiempo_Viaje', 'Poblacion']
-            missing_columns = [col for col in required_columns if col not in df_all.columns]
+            # Verify required columns exist
+            required_columns = [
+                'Zona_Origen', 'Nombre_Origen', 'Poblacion', 'Municipio', 'Comarca',
+                'Destino_Óptimo', 'Nombre_Destino', 'Necesita_Viaje', 'Tiempo_Trayecto'
+            ]
 
+            missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
-                st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
+                st.error(f"Missing required columns: {missing_columns}")
                 return None, None, None
 
-            # Show column info
-            with st.expander("📋 Data Overview"):
-                st.write("**Columns found:**")
-                col1, col2 = st.columns(2)
+            # Show data filtering info
+            original_count = len(df)
+            filtered_df = df[df['Tiempo_Trayecto'] <= 999]
+            filtered_count = len(filtered_df)
+            excluded_count = original_count - filtered_count
 
-                with col1:
-                    st.write("**Core columns:**")
-                    core_cols = ['Zona_Origen', 'Nombre_Destino', 'Tiempo_Viaje', 'Poblacion']
-                    for col in core_cols:
-                        status = "✅" if col in df_all.columns else "❌"
-                        st.write(f"{status} {col}")
+            if excluded_count > 0:
+                st.warning(
+                    f"⚠️ Excluded {excluded_count:,} records with travel times > 999 minutes from {original_count:,} total records.")
+            else:
+                st.success(f"✅ Processing {original_count:,} records (no filtering needed).")
 
-                with col2:
-                    st.write("**Optional columns:**")
-                    optional_cols = ['Municipio', 'Comarca', 'TT_Coche_NoPico', 'Distancia_km']
-                    for col in optional_cols:
-                        status = "✅" if col in df_all.columns else "❌"
-                        st.write(f"{status} {col}")
-
-                st.dataframe(df_all.head(), use_container_width=True)
-
-            # Filter valid data
-            df = df_all[df_all['Tiempo_Viaje'] <= 999].copy()
-
-            if len(df) < len(df_all):
-                removed_count = len(df_all) - len(df)
-                st.warning(f"⚠️ Removed {removed_count:,} records with travel times > 999 minutes")
-
-            # Initialize analyzer
+            # Create analyzer (which will apply the same filter internally)
             analyzer = AccessibilityAnalyzer(df)
 
-            return df, df_all, analyzer
+            return df, df, analyzer
 
         except Exception as e:
-            st.error(f"❌ Error processing file: {str(e)}")
+            st.error(f"Error processing file: {str(e)}")
             return None, None, None
 
     def render_key_metrics(self, analyzer: AccessibilityAnalyzer):
-        """Render key performance metrics"""
-        st.markdown("## 📈 Key Performance Metrics")
+        """Render key metrics section"""
+        st.markdown("## 🎯 Key Metrics")
 
-        # Calculate metrics
-        zone_best = analyzer.get_zone_best_access()
-        pop_by_category, category_pcts = analyzer.get_population_by_category()
+        metrics_calc = MetricsCalculator(analyzer)
+        metrics = metrics_calc.get_top_metrics()
 
-        # Define metrics
-        metrics = [
-            ("🏘️ Total Zones", f"{len(analyzer.zone_populations):,}"),
-            ("👥 Total Population", f"{analyzer.total_population:,}"),
-            ("⏱️ Average Best Travel Time", f"{zone_best['Tiempo_Total_Minutos'].mean():.1f} min"),
-            ("🟢 Excellent Access", f"{category_pcts.get('🟢 Excellent (<30min)', 0):.1f}%"),
-            ("🔴 Poor Access",
-             f"{(category_pcts.get('🔴 Poor (75-90min)', 0) + category_pcts.get('⚫ Very Poor (>90min)', 0)):.1f}%")
-        ]
+        col1, col2, col3, col4 = st.columns(4)
 
-        # Display metrics
-        cols = st.columns(len(metrics))
-        for i, (label, value) in enumerate(metrics):
-            with cols[i]:
-                st.metric(label, value)
+        with col1:
+            st.metric(
+                label="Total Population",
+                value=f"{metrics['total_population']:,.0f}"
+            )
 
-        # Transport comparison metrics if available
-        if analyzer.has_private_transport:
-            st.markdown("### 🚗 Transport Mode Comparison")
-            transport_comparison = analyzer.get_transport_comparison()
-            if not transport_comparison.empty:
-                avg_public = transport_comparison['Public Transport (min)'].mean()
-                avg_private = transport_comparison['Private Transport (min)'].mean()
-                avg_difference = transport_comparison['Time Difference (min)'].mean()
+        with col2:
+            st.metric(
+                label="Avg Travel Time",
+                value=f"{metrics['avg_travel_time']:.1f} min"
+            )
 
-                transport_metrics = [
-                    ("🚌 Avg Public Transport", f"{avg_public:.1f} min"),
-                    ("🚗 Avg Private Transport", f"{avg_private:.1f} min"),
-                    ("📊 Average Difference", f"{avg_difference:.1f} min"),
-                    ("📈 Public vs Private Ratio", f"{avg_public / avg_private:.1f}x")
-                ]
+        with col3:
+            excellent_pct = metrics['access_percentages'].get('🟢 Excellent (<30min)', 0)
+            st.metric(
+                label="Excellent Access",
+                value=f"{excellent_pct:.1f}%"
+            )
 
-                transport_cols = st.columns(len(transport_metrics))
-                for i, (label, value) in enumerate(transport_metrics):
-                    with transport_cols[i]:
-                        st.metric(label, value)
+        with col4:
+            st.metric(
+                label="Total Zones",
+                value=f"{metrics['total_zones']:,}"
+            )
 
     def render_accessibility_overview(self, analyzer: AccessibilityAnalyzer):
         """Render accessibility overview section"""
-        st.markdown("## 🎯 Population Accessibility Overview")
+        st.markdown("## 📊 Population Accessibility Distribution")
 
-        # Get data
-        zone_best = analyzer.get_zone_best_access()
         pop_by_category, category_pcts = analyzer.get_population_by_category()
 
-        # Population distribution pie chart
-        if not category_pcts.empty:
-            col1, col2 = st.columns(2)
+        if not pop_by_category.empty:
+            # Create pie chart
+            fig = go.Figure(data=[go.Pie(
+                labels=pop_by_category.index,
+                values=pop_by_category.values,
+                hole=.3,
+                textinfo='label+percent',
+                textposition='outside',
+                marker=dict(colors=[
+                                       CONFIG.COLORS['excellent'], CONFIG.COLORS['good'], CONFIG.COLORS['fair'],
+                                       CONFIG.COLORS['moderate'], CONFIG.COLORS['poor'], CONFIG.COLORS['very_poor']
+                                   ][:len(pop_by_category)])
+            )])
 
-            with col1:
-                fig_pie = px.pie(
-                    values=pop_by_category.values,
-                    names=pop_by_category.index,
-                    title="Population by Accessibility Level",
-                    color_discrete_map={
-                        '🟢 Excellent (<30min)': CONFIG.COLORS['excellent'],
-                        '🟡 Good (30-45min)': CONFIG.COLORS['good'],
-                        '🟠 Fair (45-60min)': CONFIG.COLORS['fair'],
-                        '🔶 Moderate (60-75min)': CONFIG.COLORS['moderate'],
-                        '🔴 Poor (75-90min)': CONFIG.COLORS['poor'],
-                        '⚫ Very Poor (>90min)': CONFIG.COLORS['very_poor']
-                    }
-                )
-
-                fig_pie.update_layout(
-                    title_font_size=20,
-                    legend=dict(font=dict(size=14)),
-                    height=500
-                )
-
-                fig_pie.update_traces(
-                    textposition='inside',
-                    textinfo='percent+label',
-                    textfont_size=12
-                )
-
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-            with col2:
-                st.markdown("### 📊 Accessibility Breakdown")
-
-                breakdown_data = []
-                for category, population in pop_by_category.items():
-                    percentage = category_pcts.get(category, 0)
-                    breakdown_data.append({
-                        'Category': category,
-                        'Population': population,
-                        'Percentage': percentage
-                    })
-
-                breakdown_df = pd.DataFrame(breakdown_data)
-                st.dataframe(
-                    breakdown_df.style.format({
-                        'Population': '{:,.0f}',
-                        'Percentage': '{:.1f}%'
-                    }),
-                    hide_index=True,
-                    use_container_width=True
-                )
-
-        # Travel time distribution histogram
-        st.markdown("### 📈 Travel Time Distribution")
-
-        # Create weighted histogram data
-        hist_data = []
-        for _, row in zone_best.iterrows():
-            hist_data.extend([row['Tiempo_Total_Minutos']] * int(row['Poblacion']))
-
-        fig_hist = px.histogram(
-            x=hist_data,
-            nbins=30,
-            title='Population Distribution by Best Travel Time',
-            labels={'x': 'Travel Time (minutes)', 'y': 'Population'}
-        )
-
-        # Add threshold lines
-        thresholds = [30, 45, 60, 75, 90]
-        threshold_names = ['Excellent', 'Good', 'Fair', 'Moderate', 'Poor']
-
-        for threshold, name in zip(thresholds, threshold_names):
-            fig_hist.add_vline(
-                x=threshold,
-                line_dash="dash",
-                line_color="red",
-                annotation_text=f"{name} ({threshold}min)",
-                annotation_position="top"
+            fig = self.styler.apply_standard_styling(
+                fig,
+                "Population Distribution by Accessibility Level",
+                "", ""
             )
 
-        fig_hist = self.styler.apply_standard_styling(
-            fig_hist,
-            'Population Distribution by Best Travel Time',
-            'Travel Time (minutes)',
-            'Population'
-        )
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.plotly_chart(fig_hist, use_container_width=True)
+            # Create bar chart
+            fig_bar = go.Figure(data=[go.Bar(
+                x=pop_by_category.index,
+                y=pop_by_category.values,
+                marker_color=[
+                                 CONFIG.COLORS['excellent'], CONFIG.COLORS['good'], CONFIG.COLORS['fair'],
+                                 CONFIG.COLORS['moderate'], CONFIG.COLORS['poor'], CONFIG.COLORS['very_poor']
+                             ][:len(pop_by_category)],
+                text=[f"{val:,.0f}" for val in pop_by_category.values],
+                textposition='outside'
+            )])
+
+            fig_bar = self.styler.apply_standard_styling(
+                fig_bar,
+                "Population by Accessibility Category",
+                "Accessibility Category",
+                "Population"
+            )
+
+            st.plotly_chart(fig_bar, use_container_width=True)
 
     def render_travel_time_distributions(self, analyzer: AccessibilityAnalyzer):
         """Render travel time distribution analysis"""
         st.markdown("## ⏱️ Travel Time Distribution Analysis")
 
-        # Box plot by POI
-        st.markdown("### 📦 Travel Time Variations by POI")
+        st.markdown("### Population-Weighted Distribution")
+        fig_weighted = self._create_travel_time_distribution(analyzer)
+        st.plotly_chart(fig_weighted, use_container_width=True)
 
-        fig_box = px.box(
-            analyzer.df,
-            x='Nombre_Destino',
-            y='Tiempo_Total_Minutos',
-            title='Travel Time Distribution by POI'
+        st.markdown("---")
+
+        st.markdown("### Distribution by Zones")
+        fig_zones = self._create_travel_time_by_zones_chart(analyzer)
+        st.plotly_chart(fig_zones, use_container_width=True)
+
+    def _create_travel_time_distribution(self, analyzer: AccessibilityAnalyzer) -> go.Figure:
+        """Create travel time distribution with KDE overlay"""
+        df = analyzer.df
+        zone_populations = analyzer.zone_populations
+        total_population = analyzer.total_population
+
+        # Create bins
+        bins = np.linspace(df['Tiempo_Total_Minutos'].min(),
+                           df['Tiempo_Total_Minutos'].max(), 41)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        # Calculate population-weighted histogram
+        bin_populations = []
+        for i in range(len(bins) - 1):
+            mask = ((df['Tiempo_Total_Minutos'] >= bins[i]) &
+                    (df['Tiempo_Total_Minutos'] < bins[i + 1]))
+            zones_in_bin = df[mask]['Zona_Origen'].unique()
+            pop_in_bin = zone_populations[zone_populations.index.isin(zones_in_bin)].sum()
+            bin_populations.append(pop_in_bin / total_population * 100)
+
+        fig = go.Figure()
+
+        # Add histogram
+        fig.add_trace(go.Bar(
+            x=bin_centers,
+            y=bin_populations,
+            marker_color='#EBEBEB',
+            width=(bins[1] - bins[0]) * 0.9,
+            showlegend=False
+        ))
+
+        # Add KDE curve
+        self._add_kde_curve(fig, df, bin_populations)
+
+        # Add reference lines
+        self._add_reference_lines(fig, analyzer)
+
+        return self.styler.apply_standard_styling(
+            fig, "Travel Time Distribution (Population-Weighted)",
+            "Total Travel Time (minutes)", "Percentage of Population (%)"
         )
 
-        fig_box.update_xaxes(tickangle=45)
-        fig_box = self.styler.apply_standard_styling(
-            fig_box,
-            'Travel Time Distribution by Point of Interest',
-            'Point of Interest',
-            'Travel Time (minutes)',
-            height=600
+    def _create_travel_time_by_zones_chart(self, analyzer: AccessibilityAnalyzer) -> go.Figure:
+        """Create travel time distribution by zones chart"""
+        zone_best = analyzer.get_zone_best_access()
+
+        fig = px.histogram(
+            zone_best,
+            x='Tiempo_Total_Minutos',
+            nbins=40,
+            histnorm='percent',
+            color_discrete_sequence=['#EBEBEB']
         )
 
-        st.plotly_chart(fig_box, use_container_width=True)
+        # Add KDE curve for zones
+        travel_times_zones = zone_best['Tiempo_Total_Minutos'].dropna()
+        if len(travel_times_zones) > 0:
+            kde = stats.gaussian_kde(travel_times_zones)
+            x_range = np.linspace(travel_times_zones.min(), travel_times_zones.max(), 200)
+            y_kde = kde(x_range)
+            y_kde_normalized = y_kde * 100 * (travel_times_zones.max() - travel_times_zones.min()) / 40
 
-        # Summary statistics table
-        st.markdown("### 📋 Travel Time Summary Statistics by POI")
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_normalized,
+                mode='lines',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
 
-        poi_stats = analyzer.df.groupby('Nombre_Destino')['Tiempo_Total_Minutos'].agg([
-            'count', 'mean', 'median', 'std', 'min', 'max'
-        ]).round(2)
+            # Add reference lines with zone percentages
+            total_zones = len(zone_best)
+            zones_under_30_pct = (zone_best['Tiempo_Total_Minutos'] <= 30).sum() / total_zones * 100
+            zones_under_45_pct = (zone_best['Tiempo_Total_Minutos'] <= 45).sum() / total_zones * 100
+            zones_under_60_pct = (zone_best['Tiempo_Total_Minutos'] <= 60).sum() / total_zones * 100
+            zones_under_75_pct = (zone_best['Tiempo_Total_Minutos'] <= 75).sum() / total_zones * 100
+            zones_under_90_pct = (zone_best['Tiempo_Total_Minutos'] <= 90).sum() / total_zones * 100
 
-        poi_stats.columns = ['Routes', 'Mean', 'Median', 'Std Dev', 'Min', 'Max']
-        poi_stats = poi_stats.reset_index()
-        poi_stats.columns = ['POI', 'Routes', 'Mean (min)', 'Median (min)', 'Std Dev (min)', 'Min (min)', 'Max (min)']
+            fig.add_vline(x=30, line_dash="dash", line_color="green",
+                          annotation_text=f"30 min<br>({zones_under_30_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=45, line_dash="dash", line_color="orange",
+                          annotation_text=f"45 min<br>({zones_under_45_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=60, line_dash="dash", line_color="red",
+                          annotation_text=f"60 min<br>({zones_under_60_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=75, line_dash="dash", line_color="darkred",
+                          annotation_text=f"75 min<br>({zones_under_75_pct:.1f}% zones)",
+                          annotation_position="top")
+            fig.add_vline(x=90, line_dash="dash", line_color="maroon",
+                          annotation_text=f"90 min<br>({zones_under_90_pct:.1f}% zones)",
+                          annotation_position="top")
 
-        st.dataframe(poi_stats, use_container_width=True, hide_index=True)
+        return self.styler.apply_standard_styling(
+            fig, "Travel Time Distribution by Zones",
+            "Total Travel Time (minutes)", "Percentage of Zones (%)"
+        )
+
+    def _add_kde_curve(self, fig: go.Figure, df: pd.DataFrame, bin_populations: List[float]):
+        """Add KDE curve to histogram"""
+        travel_times_list = []
+        for _, row in df.iterrows():
+            travel_times_list.extend([row['Tiempo_Total_Minutos']] * int(row['Poblacion'] / 100))
+
+        if len(travel_times_list) > 0:
+            travel_times_weighted = np.array(travel_times_list)
+            kde = stats.gaussian_kde(travel_times_weighted)
+            x_range = np.linspace(df['Tiempo_Total_Minutos'].min(),
+                                  df['Tiempo_Total_Minutos'].max(), 200)
+            y_kde = kde(x_range)
+            y_kde_scaled = y_kde * max(bin_populations) / y_kde.max() * 0.8
+
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=y_kde_scaled,
+                mode='lines',
+                line=dict(color='#C00000', width=3),
+                showlegend=False
+            ))
+
+    def _add_reference_lines(self, fig: go.Figure, analyzer: AccessibilityAnalyzer):
+        """Add reference lines for accessibility thresholds"""
+        pop_by_category, category_pcts = analyzer.get_population_by_category()
+
+        excellent_pct = category_pcts.get(CONFIG.CATEGORY_LABELS['excellent'], 0)
+        good_pct = excellent_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['good'], 0)
+        fair_pct = good_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['fair'], 0)
+        moderate_pct = fair_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['moderate'], 0)
+        poor_pct = moderate_pct + category_pcts.get(CONFIG.CATEGORY_LABELS['poor'], 0)
+
+        fig.add_vline(x=30, line_dash="dash", line_color="green",
+                      annotation_text=f"30 min<br>({excellent_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=45, line_dash="dash", line_color="orange",
+                      annotation_text=f"45 min<br>({good_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=60, line_dash="dash", line_color="red",
+                      annotation_text=f"60 min<br>({fair_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=75, line_dash="dash", line_color="darkred",
+                      annotation_text=f"75 min<br>({moderate_pct:.1f}%)",
+                      annotation_position="top")
+        fig.add_vline(x=90, line_dash="dash", line_color="maroon",
+                      annotation_text=f"90 min<br>({poor_pct:.1f}%)",
+                      annotation_position="top")
 
     def render_poi_analysis(self, analyzer: AccessibilityAnalyzer):
-        """Render POI-specific analysis"""
-        st.markdown("## 🎯 Point of Interest Analysis")
+        """Render POI accessibility breakdown"""
+        st.markdown("## 🎯 Accessibility Breakdown by POI")
 
         poi_analysis = analyzer.get_poi_accessibility()
 
         if not poi_analysis.empty:
-            # POI performance ranking
-            st.markdown("### 🏆 POI Performance Ranking")
+            # Show top 10 POIs
+            top_pois = poi_analysis.head(10)
 
-            fig_poi = go.Figure()
+            fig = go.Figure()
 
             categories = ['Excellent (%)', 'Good (%)', 'Fair (%)', 'Moderate (%)', 'Poor (%)', 'Very Poor (%)']
             colors = [CONFIG.COLORS['excellent'], CONFIG.COLORS['good'], CONFIG.COLORS['fair'],
@@ -661,25 +582,24 @@ class StreamlitApp:
             labels = ['🟢 Excellent', '🟡 Good', '🟠 Fair', '🔶 Moderate', '🔴 Poor', '⚫ Very Poor']
 
             for cat, color, label in zip(categories, colors, labels):
-                fig_poi.add_trace(go.Bar(
+                fig.add_trace(go.Bar(
                     name=label,
-                    y=poi_analysis['POI'],
-                    x=poi_analysis[cat],
+                    y=top_pois['POI'],
+                    x=top_pois[cat],
                     orientation='h',
                     marker_color=color,
-                    text=poi_analysis[cat].round(1),
+                    text=top_pois[cat].round(1),
                     textposition='inside',
                     texttemplate='%{text:.0f}%'
                 ))
 
-            fig_poi = self.styler.apply_standard_styling(
-                fig_poi,
-                'POI Accessibility Performance',
-                '% of Population',
-                'Point of Interest',
-                height=max(600, len(poi_analysis) * 40)
+            fig = self.styler.apply_standard_styling(
+                fig,
+                "Top 10 POIs - Accessibility Distribution",
+                "% of Population",
+                "Point of Interest"
             )
-            fig_poi.update_layout(
+            fig.update_layout(
                 barmode='stack',
                 yaxis=dict(categoryorder='total ascending'),
                 legend=dict(
@@ -691,283 +611,117 @@ class StreamlitApp:
                 )
             )
 
-            st.plotly_chart(fig_poi, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
-            # Detailed POI table
-            st.markdown("### 📊 Detailed POI Analysis")
-            display_columns = ['POI', 'Avg Time (weighted)', 'Total Population',
-                               'Excellent (%)', 'Good (%)', 'Fair (%)', 'Moderate (%)', 'Poor (%)', 'Very Poor (%)']
-
-            format_dict = {
-                'Avg Time (weighted)': '{:.1f} min',
-                'Total Population': '{:,.0f}',
-                'Excellent (%)': '{:.1f}%',
-                'Good (%)': '{:.1f}%',
-                'Fair (%)': '{:.1f}%',
-                'Moderate (%)': '{:.1f}%',
-                'Poor (%)': '{:.1f}%',
-                'Very Poor (%)': '{:.1f}%'
-            }
-
+            # Show detailed table
+            st.markdown("### Detailed POI Analysis")
             st.dataframe(
-                poi_analysis[display_columns].style.format(format_dict),
-                hide_index=True,
-                use_container_width=True,
-                height=400
+                poi_analysis.style.format({
+                    'Avg Time (weighted)': '{:.1f} min',
+                    'Total Population': '{:,.0f}',
+                    'Excellent (%)': '{:.1f}%',
+                    'Good (%)': '{:.1f}%',
+                    'Fair (%)': '{:.1f}%',
+                    'Moderate (%)': '{:.1f}%',
+                    'Poor (%)': '{:.1f}%',
+                    'Very Poor (%)': '{:.1f}%'
+                }),
+                use_container_width=True
             )
 
     def render_trip_need_analysis(self, analyzer: AccessibilityAnalyzer):
-        """Render trip need and priority analysis"""
-        st.markdown("## 🔄 Trip Need & Priority Zone Analysis")
+        """Render trip need analysis"""
+        st.markdown("## 🔄 Trip Need Analysis")
 
-        # Priority zones analysis
-        priority_zones = analyzer.get_priority_zones(threshold=45)
-
-        if not priority_zones.empty:
-            st.markdown("### ⚠️ Priority Zones (>45min average travel time)")
-
-            col1, col2 = st.columns([2, 1])
-
-            with col1:
-                # Priority zones chart
-                fig_priority = px.scatter(
-                    priority_zones.head(20),
-                    x='Avg Travel Time',
-                    y='Population',
-                    size='Population',
-                    hover_data=['Zone Name', 'POIs Served', 'Avg Transfers'],
-                    title='Top 20 Priority Zones by Population',
-                    labels={'Avg Travel Time': 'Average Travel Time (minutes)', 'Population': 'Population'}
-                )
-
-                fig_priority = self.styler.apply_standard_styling(
-                    fig_priority,
-                    'Priority Zones - High Travel Time & Population',
-                    'Average Travel Time (minutes)',
-                    'Population'
-                )
-
-                st.plotly_chart(fig_priority, use_container_width=True)
-
-            with col2:
-                st.markdown("#### 📈 Priority Zone Summary")
-                st.metric("Zones Needing Attention", len(priority_zones))
-                st.metric("Population Affected", f"{priority_zones['Population'].sum():,}")
-                st.metric("Average Travel Time", f"{priority_zones['Avg Travel Time'].mean():.1f} min")
-
-            # Priority zones table
-            st.markdown("#### 📋 Detailed Priority Zones")
-            priority_display = priority_zones[
-                ['Zone Name', 'Avg Travel Time', 'Population', 'POIs Served', 'Avg Transfers']].head(15)
-
-            st.dataframe(
-                priority_display.style.format({
-                    'Avg Travel Time': '{:.1f} min',
-                    'Population': '{:,.0f}',
-                    'POIs Served': '{:.0f}',
-                    'Avg Transfers': '{:.2f}'
-                }),
-                hide_index=True,
-                use_container_width=True,
-                height=400
-            )
-
-        # Service frequency analysis
-        st.markdown("### 🚌 Service Coverage Analysis")
-
-        coverage_analysis = analyzer.df.groupby('Zona_Origen').agg({
-            'Nombre_Destino': 'nunique',
+        # Calculate trip need statistics
+        trip_need_stats = analyzer.df.groupby('Zona_Origen').agg({
+            'Necesita_Viaje': ['count', 'sum'],
             'Poblacion': 'first',
-            'Tiempo_Total_Minutos': 'mean'
+            'Nombre_Origen': 'first'
         }).reset_index()
 
-        coverage_analysis.columns = ['Zone_ID', 'POIs_Accessible', 'Population', 'Avg_Travel_Time']
+        trip_need_stats.columns = ['Zone_ID', 'Total_Trips', 'Trips_Needed', 'Population', 'Zone_Name']
+        trip_need_stats['Need_Rate'] = (trip_need_stats['Trips_Needed'] / trip_need_stats['Total_Trips'] * 100)
 
-        # Coverage distribution
-        hist_coverage_data = []
-        for _, row in coverage_analysis.iterrows():
-            hist_coverage_data.extend([row['POIs_Accessible']] * int(row['Population']))
-
-        fig_coverage = px.histogram(
-            x=hist_coverage_data,
-            title='Population Distribution by Number of Accessible POIs',
-            labels={'x': 'Number of Accessible POIs', 'y': 'Population'}
-        )
-
-        fig_coverage = self.styler.apply_standard_styling(
-            fig_coverage,
-            'Population Distribution by POI Accessibility',
-            'Number of Accessible POIs',
-            'Population'
-        )
-
-        st.plotly_chart(fig_coverage, use_container_width=True)
-
-    def render_transport_comparison(self, analyzer: AccessibilityAnalyzer):
-        """Render transport mode comparison analysis"""
-        if not analyzer.has_private_transport:
-            st.warning(
-                "⚠️ Private transport data not available. Please ensure your data includes 'TT_Coche_NoPico' and 'Distancia_km' columns.")
-            return
-
-        st.markdown("## 🚗🚌 Public vs Private Transport Comparison")
-
-        # Get comparison data
-        transport_comparison = analyzer.get_transport_comparison()
-
-        if transport_comparison.empty:
-            st.error("No transport comparison data available.")
-            return
-
-        # Overall comparison metrics
+        # Overall statistics
         col1, col2, col3 = st.columns(3)
 
-        avg_public = transport_comparison['Public Transport (min)'].mean()
-        avg_private = transport_comparison['Private Transport (min)'].mean()
-        avg_difference = transport_comparison['Time Difference (min)'].mean()
+        total_trips = trip_need_stats['Total_Trips'].sum()
+        total_needed = trip_need_stats['Trips_Needed'].sum()
+        overall_rate = (total_needed / total_trips * 100) if total_trips > 0 else 0
 
         with col1:
-            st.metric("Average Public Transport", f"{avg_public:.1f} min")
+            st.metric("Total Trip Connections", f"{total_trips:,}")
+
         with col2:
-            st.metric("Average Private Transport", f"{avg_private:.1f} min")
+            st.metric("Trips Requiring Travel", f"{total_needed:,}")
+
         with col3:
-            delta_color = "normal" if avg_difference > 0 else "inverse"
-            st.metric("Average Time Difference", f"{avg_difference:.1f} min",
-                      delta=f"{avg_difference:.1f} min slower" if avg_difference > 0 else f"{abs(avg_difference):.1f} min faster",
-                      delta_color=delta_color)
+            st.metric("Overall Need Rate", f"{overall_rate:.1f}%")
 
-        # Transport comparison by POI
-        st.markdown("### 🎯 Transport Comparison by POI")
+        # Trip need distribution
+        need_rates = trip_need_stats['Need_Rate'].values
+        populations = trip_need_stats['Population'].values
 
-        fig_transport = go.Figure()
+        # Create population-weighted histogram using numpy
+        hist, bins = np.histogram(need_rates, bins=20, weights=populations)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
 
-        # Add public transport bars
-        fig_transport.add_trace(go.Bar(
-            name='🚌 Public Transport',
-            x=transport_comparison['POI'],
-            y=transport_comparison['Public Transport (min)'],
-            marker_color=CONFIG.COLORS['public_transport'],
-            text=transport_comparison['Public Transport (min)'].round(1),
+        fig = go.Figure(data=[go.Bar(
+            x=bin_centers,
+            y=hist,
+            width=bins[1] - bins[0],
+            name="Population",
+            text=[f"{val:,.0f}" for val in hist],
             textposition='outside'
-        ))
+        )])
 
-        # Add private transport bars
-        fig_transport.add_trace(go.Bar(
-            name='🚗 Private Transport',
-            x=transport_comparison['POI'],
-            y=transport_comparison['Private Transport (min)'],
-            marker_color=CONFIG.COLORS['private_transport'],
-            text=transport_comparison['Private Transport (min)'].round(1),
-            textposition='outside'
-        ))
-
-        fig_transport.update_layout(
-            title='Travel Time Comparison by POI',
-            xaxis_title='Point of Interest',
-            yaxis_title='Travel Time (minutes)',
-            barmode='group',
-            height=600
+        fig = self.styler.apply_standard_styling(
+            fig,
+            "Distribution of Trip Need Rates (Population-Weighted)",
+            "Trip Need Rate (%)",
+            "Population"
         )
 
-        fig_transport.update_xaxes(tickangle=45)
-        st.plotly_chart(fig_transport, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Time difference analysis
-        st.markdown("### 📊 Time Difference Analysis")
+        # Top zones by trip need
+        st.markdown("### Zones with Highest Trip Need Rates")
+        top_need_zones = trip_need_stats.nlargest(10, 'Need_Rate')
 
-        fig_diff = px.bar(
-            transport_comparison.sort_values('Time Difference (min)', ascending=True),
-            x='Time Difference (min)',
-            y='POI',
+        fig_bar = go.Figure(data=[go.Bar(
+            x=top_need_zones['Need_Rate'],
+            y=top_need_zones['Zone_Name'],
             orientation='h',
-            title='Public Transport Time Penalty/Advantage by POI',
-            color='Time Difference (min)',
-            color_continuous_scale=['green', 'yellow', 'red'],
-            text='Time Difference (min)'
+            text=top_need_zones['Need_Rate'].round(1),
+            textposition='outside',
+            texttemplate='%{text:.1f}%'
+        )])
+
+        fig_bar = self.styler.apply_standard_styling(
+            fig_bar,
+            "Top 10 Zones by Trip Need Rate",
+            "Trip Need Rate (%)",
+            "Zone"
         )
 
-        fig_diff.update_traces(texttemplate='%{text:.1f} min', textposition='outside')
-        fig_diff.update_layout(
-            height=max(400, len(transport_comparison) * 30),
-            xaxis_title='Time Difference (minutes - positive means public transport is slower)',
-            yaxis_title='Point of Interest'
-        )
-
-        st.plotly_chart(fig_diff, use_container_width=True)
-
-        # Distance vs time analysis
-        st.markdown("### 🛣️ Distance vs Travel Time Analysis")
-
-        fig_scatter = px.scatter(
-            transport_comparison,
-            x='Distance (km)',
-            y='Public Transport (min)',
-            size='Total Population',
-            hover_data=['POI', 'Private Transport (min)', 'Time Difference (min)'],
-            title='Public Transport Time vs Distance',
-            color='Time Difference (min)',
-            color_continuous_scale=['green', 'yellow', 'red']
-        )
-
-        fig_scatter.update_layout(
-            height=600,
-            xaxis_title='Distance (km)',
-            yaxis_title='Public Transport Time (minutes)'
-        )
-
-        st.plotly_chart(fig_scatter, use_container_width=True)
-
-        # Detailed comparison table
-        st.markdown("### 📋 Detailed Transport Comparison")
-
-        format_dict = {
-            'Public Transport (min)': '{:.1f}',
-            'Private Transport (min)': '{:.1f}',
-            'Distance (km)': '{:.1f}',
-            'Time Difference (min)': '{:.1f}',
-            'Total Population': '{:,.0f}'
-        }
-
-        st.dataframe(
-            transport_comparison.style.format(format_dict),
-            hide_index=True,
-            use_container_width=True,
-            height=400
-        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     def render_geographic_analysis(self, analyzer: AccessibilityAnalyzer):
         """Render geographic analysis by municipality and comarca"""
         st.markdown("## 🗺️ Geographic Analysis by Municipality & Comarca")
 
         # Municipality analysis
-        if 'Municipio' in analyzer.df.columns:
-            st.markdown("### Analysis by Municipality")
-            muni_analysis = self._calculate_geographic_analysis(analyzer, 'Municipio', 'Municipality')
-            self._render_geographic_chart(muni_analysis, 'Municipality', 10)
-            self._render_geographic_table(muni_analysis)
-
-            # Municipality transport differences if available
-            if analyzer.has_private_transport:
-                st.markdown("### 🚗🚌 Municipality Transport Mode Differences")
-                muni_diff = analyzer.get_geographic_differences('Municipio')
-                if not muni_diff.empty:
-                    self._render_transport_difference_chart(muni_diff, 'Municipality')
-                    self._render_transport_difference_table(muni_diff)
+        st.markdown("### Analysis by Municipality")
+        muni_analysis = self._calculate_geographic_analysis(analyzer, 'Municipio', 'Municipality')
+        self._render_geographic_chart(muni_analysis, 'Municipality', 10)
+        self._render_geographic_table(muni_analysis)
 
         # Comarca analysis
-        if 'Comarca' in analyzer.df.columns:
-            st.markdown("### Analysis by Comarca")
-            comarca_analysis = self._calculate_geographic_analysis(analyzer, 'Comarca', 'Comarca')
-            self._render_geographic_chart(comarca_analysis, 'Comarca', 10)
-            self._render_geographic_table(comarca_analysis)
-
-            # Comarca transport differences if available
-            if analyzer.has_private_transport:
-                st.markdown("### 🚗🚌 Comarca Transport Mode Differences")
-                comarca_diff = analyzer.get_geographic_differences('Comarca')
-                if not comarca_diff.empty:
-                    self._render_transport_difference_chart(comarca_diff, 'Comarca')
-                    self._render_transport_difference_table(comarca_diff)
+        st.markdown("### Analysis by Comarca")
+        comarca_analysis = self._calculate_geographic_analysis(analyzer, 'Comarca', 'Comarca')
+        self._render_geographic_chart(comarca_analysis, 'Comarca', 10)
+        self._render_geographic_table(comarca_analysis)
 
     def _calculate_geographic_analysis(self, analyzer: AccessibilityAnalyzer,
                                        geo_column: str, unit_type: str) -> pd.DataFrame:
@@ -1093,53 +847,120 @@ class StreamlitApp:
             height=400
         )
 
-    def _render_transport_difference_chart(self, analysis: pd.DataFrame, unit_type: str):
-        """Render transport mode difference chart"""
-        unit_plural = f"{unit_type}s" if unit_type != "Comarca" else "Comarcas"
+    def render_transport_comparison(self, analyzer: AccessibilityAnalyzer):
+        """Render public vs private transport comparison"""
+        st.markdown("## 🚗🚌 Public vs Private Transport Comparison")
 
-        fig_diff = go.Figure()
+        comparison_df = analyzer.get_transport_comparison()
 
-        # Add bars for time difference
-        fig_diff.add_trace(go.Bar(
-            name='Time Difference (Public - Private)',
-            y=analysis['Geographic Unit'],
-            x=analysis['Time Difference (min)'],
+        if comparison_df.empty:
+            st.warning("TT_Coche column not found in data. Cannot perform comparison.")
+            return
+
+        # Overall statistics
+        st.markdown("### Overall Comparison")
+        col1, col2, col3 = st.columns(3)
+
+        avg_public = np.average(comparison_df['Tiempo_Total_Minutos'],
+                                weights=comparison_df['Poblacion'])
+        avg_private = np.average(comparison_df['TT_Coche'],
+                                 weights=comparison_df['Poblacion'])
+        avg_diff = np.average(comparison_df['Difference'],
+                              weights=comparison_df['Poblacion'])
+
+        col1.metric("Avg Public Transport", f"{avg_public:.1f} min")
+        col2.metric("Avg Private Transport", f"{avg_private:.1f} min")
+        col3.metric("Avg Difference", f"{avg_diff:.1f} min",
+                    delta=f"{(avg_diff / avg_private * 100):.1f}%")
+
+        # Municipality comparison
+        st.markdown("### Comparison by Municipality")
+        muni_comp = self._calculate_transport_comparison_geo(comparison_df, 'Municipio')
+        self._render_transport_comparison_chart(muni_comp, 'Municipality', 10)
+        self._render_transport_comparison_table(muni_comp)
+
+        # Comarca comparison
+        st.markdown("### Comparison by Comarca")
+        comarca_comp = self._calculate_transport_comparison_geo(comparison_df, 'Comarca')
+        self._render_transport_comparison_chart(comarca_comp, 'Comarca', 10)
+        self._render_transport_comparison_table(comarca_comp)
+
+    def _calculate_transport_comparison_geo(self, comparison_df: pd.DataFrame,
+                                            geo_column: str) -> pd.DataFrame:
+        """Calculate transport comparison for geographic unit"""
+        geo_comp = comparison_df.groupby(geo_column).apply(
+            lambda x: pd.Series({
+                'Total Population': x['Poblacion'].sum(),
+                'Avg Public Time': np.average(x['Tiempo_Total_Minutos'], weights=x['Poblacion']),
+                'Avg Private Time': np.average(x['TT_Coche'], weights=x['Poblacion']),
+                'Avg Difference': np.average(x['Difference'], weights=x['Poblacion']),
+                'Zones': len(x)
+            })
+        ).reset_index()
+
+        geo_comp['Ratio'] = geo_comp['Avg Public Time'] / geo_comp['Avg Private Time']
+        geo_comp.columns = ['Geographic Unit', 'Total Population', 'Avg Public Time',
+                            'Avg Private Time', 'Avg Difference', 'Zones', 'Ratio']
+
+        return geo_comp.sort_values('Total Population', ascending=False)
+
+    def _render_transport_comparison_chart(self, analysis: pd.DataFrame,
+                                           unit_type: str, top_n: int):
+        """Render transport comparison chart"""
+        chart_data = analysis.head(top_n) if top_n < len(analysis) else analysis
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            name='Public Transport',
+            y=chart_data['Geographic Unit'],
+            x=chart_data['Avg Public Time'],
             orientation='h',
-            marker_color=CONFIG.COLORS['difference'],
-            text=analysis['Time Difference (min)'].round(1),
-            textposition='outside',
-            texttemplate='%{text:.1f} min'
+            marker_color='#3498db',
+            text=chart_data['Avg Public Time'].round(1),
+            textposition='inside'
         ))
 
-        title = f'{unit_plural} - Public vs Private Transport Time Difference'
+        fig.add_trace(go.Bar(
+            name='Private Transport',
+            y=chart_data['Geographic Unit'],
+            x=chart_data['Avg Private Time'],
+            orientation='h',
+            marker_color='#e74c3c',
+            text=chart_data['Avg Private Time'].round(1),
+            textposition='inside'
+        ))
 
-        fig_diff = self.styler.apply_standard_styling(
-            fig_diff,
+        title = f'Top {top_n} {unit_type}s - Public vs Private Transport' if top_n < len(
+            analysis) else f'{unit_type}s - Public vs Private Transport'
+
+        fig = self.styler.apply_standard_styling(
+            fig,
             title,
-            'Time Difference (minutes)',
+            'Average Travel Time (minutes)',
             unit_type,
-            height=max(600, len(analysis) * 30)
+            height=max(600, len(chart_data) * 40)
         )
 
-        # Add vertical line at 0
-        fig_diff.add_vline(x=0, line_dash="dash", line_color="black", annotation_text="Equal Travel Time")
+        fig.update_layout(
+            barmode='group',
+            yaxis=dict(categoryorder='total ascending'),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
 
-        fig_diff.update_layout(yaxis=dict(categoryorder='total ascending'))
-        st.plotly_chart(fig_diff, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    def _render_transport_difference_table(self, analysis: pd.DataFrame):
-        """Render transport mode difference table"""
-        columns = ['Geographic Unit', 'Public Transport (min)', 'Private Transport (min)',
-                   'Distance (km)', 'Time Difference (min)', 'Total Population', 'Zones']
-        display_df = analysis[columns]
+    def _render_transport_comparison_table(self, analysis: pd.DataFrame):
+        """Render transport comparison table"""
+        display_df = analysis.copy()
 
         format_dict = {
-            'Public Transport (min)': '{:.1f}',
-            'Private Transport (min)': '{:.1f}',
-            'Distance (km)': '{:.1f}',
-            'Time Difference (min)': '{:.1f}',
             'Total Population': '{:,.0f}',
-            'Zones': '{:.0f}'
+            'Avg Public Time': '{:.1f} min',
+            'Avg Private Time': '{:.1f} min',
+            'Avg Difference': '{:.1f} min',
+            'Zones': '{:.0f}',
+            'Ratio': '{:.2f}x'
         }
 
         st.dataframe(
@@ -1148,7 +969,6 @@ class StreamlitApp:
             use_container_width=True,
             height=400
         )
-
     def run(self):
         """Main application runner"""
         self.render_header()
@@ -1165,19 +985,14 @@ class StreamlitApp:
                 self.render_key_metrics(analyzer)
 
                 # Create tabs for different sections
-                tab_list = [
+                tabs = st.tabs([
                     "📊 Population Accessibility",
                     "⏱️ Travel Time Distributions",
                     "🎯 POI Breakdown",
                     "🔄 Trip Need Analysis",
-                    "🗺️ Geographic Analysis"
-                ]
-
-                # Add transport comparison tab if data is available
-                if analyzer.has_private_transport:
-                    tab_list.insert(4, "🚗🚌 Transport Comparison")
-
-                tabs = st.tabs(tab_list)
+                    "🗺️ Geographic Analysis",
+                    "🚗🚌 Public vs Private"
+                ])
 
                 with tabs[0]:
                     self.render_accessibility_overview(analyzer)
@@ -1191,28 +1006,11 @@ class StreamlitApp:
                 with tabs[3]:
                     self.render_trip_need_analysis(analyzer)
 
-                # Handle transport comparison tab if available
-                if analyzer.has_private_transport:
-                    with tabs[4]:
-                        self.render_transport_comparison(analyzer)
-                    with tabs[5]:
-                        self.render_geographic_analysis(analyzer)
-                else:
-                    with tabs[4]:
-                        self.render_geographic_analysis(analyzer)
+                with tabs[4]:
+                    self.render_geographic_analysis(analyzer)
 
-                # Export functionality
-                st.markdown("## 📥 Export Data")
-
-                if st.button("📊 Generate Comprehensive Excel Report"):
-                    excel_data = self.exporter.generate_detailed_report(analyzer)
-
-                    st.download_button(
-                        label="📥 Download Excel Report",
-                        data=excel_data,
-                        file_name=f"accessibility_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                with tabs[5]:
+                    self.render_transport_comparison(analyzer)
 
 
 # ============================================================================
@@ -1222,4 +1020,3 @@ class StreamlitApp:
 if __name__ == "__main__":
     app = StreamlitApp()
     app.run()
-    
