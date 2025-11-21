@@ -31,7 +31,10 @@ class AccessibilityConfig:
         'fair': '#FEE08B',
         'moderate': '#FDAE61',
         'poor': '#F46D43',
-        'very_poor': '#D73027'
+        'very_poor': '#D73027',
+        'public_transport': '#1f77b4',
+        'private_transport': '#ff7f0e',
+        'difference': '#2ca02c'
     }
 
     CATEGORY_LABELS = {
@@ -57,10 +60,19 @@ class AccessibilityAnalyzer:
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
         # Calculate total travel time in minutes
-        self.df['Tiempo_Total_Minutos'] = self.df['Tiempo_Trayecto']  # Using Tiempo_Trayecto as total time
+        self.df['Tiempo_Total_Minutos'] = self.df['Tiempo_Viaje']  # Using Tiempo_Trayecto as total time
 
         # Filter out zones with travel times > 999 minutes (unrealistic/invalid data)
         self.df = self.df[self.df['Tiempo_Total_Minutos'] <= 999]
+
+        # Check for private transport columns
+        self.has_private_transport = 'TT_Coche_NoPico' in self.df.columns and 'Distancia_km' in self.df.columns
+
+        if self.has_private_transport:
+            # Convert car travel time to minutes if needed
+            self.df['TT_Coche_Minutos'] = self.df['TT_Coche_NoPico']  # Assuming already in minutes
+            # Calculate time difference (positive means public transport is slower)
+            self.df['Diferencia_Tiempo'] = self.df['Tiempo_Total_Minutos'] - self.df['TT_Coche_Minutos']
 
         self.zone_populations = self._calculate_zone_populations()
         self.total_population = self.zone_populations.sum()
@@ -161,6 +173,87 @@ class AccessibilityAnalyzer:
         zone_metrics.columns = ['Zone_ID', 'Avg Travel Time', 'Zone Name', 'POIs Served', 'Avg Transfers', 'Population']
 
         return zone_metrics[zone_metrics['Avg Travel Time'] > threshold].sort_values('Population', ascending=False)
+
+    def get_transport_comparison(self) -> pd.DataFrame:
+        """Get comparison between public and private transport"""
+        if not self.has_private_transport:
+            return pd.DataFrame()
+
+        comparison_data = []
+
+        for poi in self.df['Nombre_Destino'].unique():
+            poi_subset = self.df[self.df['Nombre_Destino'] == poi]
+            zone_data = poi_subset.groupby('Zona_Origen').agg({
+                'Poblacion': 'first',
+                'Tiempo_Total_Minutos': 'mean',
+                'TT_Coche_Minutos': 'mean',
+                'Distancia_km': 'mean',
+                'Diferencia_Tiempo': 'mean'
+            })
+
+            total_pop = zone_data['Poblacion'].sum()
+            if total_pop == 0:
+                continue
+
+            # Calculate weighted averages
+            weighted_public = (zone_data['Tiempo_Total_Minutos'] * zone_data['Poblacion']).sum() / total_pop
+            weighted_private = (zone_data['TT_Coche_Minutos'] * zone_data['Poblacion']).sum() / total_pop
+            weighted_distance = (zone_data['Distancia_km'] * zone_data['Poblacion']).sum() / total_pop
+            weighted_difference = (zone_data['Diferencia_Tiempo'] * zone_data['Poblacion']).sum() / total_pop
+
+            comparison_data.append({
+                'POI': poi,
+                'Public Transport (min)': weighted_public,
+                'Private Transport (min)': weighted_private,
+                'Distance (km)': weighted_distance,
+                'Time Difference (min)': weighted_difference,
+                'Total Population': total_pop
+            })
+
+        return pd.DataFrame(comparison_data).sort_values('Time Difference (min)', ascending=False)
+
+    def get_geographic_differences(self, geo_column: str) -> pd.DataFrame:
+        """Calculate geographic differences between public and private transport"""
+        if not self.has_private_transport:
+            return pd.DataFrame()
+
+        # Get zone-level data with geographic info
+        zone_geo = self.df[['Zona_Origen', geo_column]].drop_duplicates()
+        zone_transport = self.df.groupby('Zona_Origen').agg({
+            'Poblacion': 'first',
+            'Tiempo_Total_Minutos': 'mean',
+            'TT_Coche_Minutos': 'mean',
+            'Distancia_km': 'mean',
+            'Diferencia_Tiempo': 'mean'
+        }).reset_index()
+
+        analysis_data = zone_transport.merge(zone_geo, on='Zona_Origen')
+
+        # Group by geographic unit and calculate weighted averages
+        geo_analysis = []
+        for geo_unit in analysis_data[geo_column].unique():
+            unit_data = analysis_data[analysis_data[geo_column] == geo_unit]
+            total_pop = unit_data['Poblacion'].sum()
+
+            if total_pop == 0:
+                continue
+
+            weighted_public = (unit_data['Tiempo_Total_Minutos'] * unit_data['Poblacion']).sum() / total_pop
+            weighted_private = (unit_data['TT_Coche_Minutos'] * unit_data['Poblacion']).sum() / total_pop
+            weighted_distance = (unit_data['Distancia_km'] * unit_data['Poblacion']).sum() / total_pop
+            weighted_difference = (unit_data['Diferencia_Tiempo'] * unit_data['Poblacion']).sum() / total_pop
+
+            geo_analysis.append({
+                'Geographic Unit': geo_unit,
+                'Public Transport (min)': weighted_public,
+                'Private Transport (min)': weighted_private,
+                'Distance (km)': weighted_distance,
+                'Time Difference (min)': weighted_difference,
+                'Total Population': total_pop,
+                'Zones': len(unit_data)
+            })
+
+        return pd.DataFrame(geo_analysis).sort_values('Time Difference (min)', ascending=False)
 
 
 # ============================================================================
