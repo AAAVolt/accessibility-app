@@ -725,22 +725,18 @@ class StreamlitApp:
 
     def _calculate_geographic_analysis(self, analyzer: AccessibilityAnalyzer,
                                        geo_column: str, unit_type: str) -> pd.DataFrame:
-        """Calculate geographic analysis for a given geographic unit"""
-        # Get zone-level best access
         zone_best = analyzer.get_zone_best_access()
-
-        # Merge with geographic data
         zone_geo = analyzer.df[['Zona_Origen', geo_column, 'Num_Transbordos']].drop_duplicates()
         analysis_data = zone_best.merge(zone_geo, on='Zona_Origen')
 
-        # Group by geographic unit
-        geo_analysis = analysis_data.groupby(geo_column).agg({
-            'Poblacion': 'sum',
-            'Tiempo_Total_Minutos': lambda x: np.average(x, weights=analysis_data.loc[x.index, 'Poblacion']),
-            'Num_Transbordos': lambda x: np.average(x, weights=analysis_data.loc[x.index, 'Poblacion']),
-            'Zona_Origen': 'count'
-        }).reset_index()
-
+        geo_analysis = analysis_data.groupby(geo_column).apply(
+            lambda group: pd.Series({
+                'Total Population': group['Poblacion'].sum(),
+                'Avg Travel Time': np.average(group['Tiempo_Total_Minutos'], weights=group['Poblacion']),
+                'Avg Transfers': np.average(group['Num_Transbordos'], weights=group['Poblacion']),
+                'Zones': len(group)
+            })
+        ).reset_index()
         geo_analysis.columns = ['Geographic Unit', 'Total Population', 'Avg Travel Time', 'Avg Transfers', 'Zones']
 
         # Calculate accessibility percentages
@@ -760,10 +756,14 @@ class StreamlitApp:
                 if max_time == float('inf'):
                     cat_zones = unit_data[unit_data['Tiempo_Total_Minutos'] > min_time]
                 else:
-                    cat_zones = unit_data[
-                        (unit_data['Tiempo_Total_Minutos'] > min_time) &
-                        (unit_data['Tiempo_Total_Minutos'] <= max_time)
-                        ]
+                    if min_time == 0:
+                        # Para la primera categoría, incluir desde 0
+                        cat_zones = unit_data[unit_data['Tiempo_Total_Minutos'] <= max_time]
+                    else:
+                        cat_zones = unit_data[
+                            (unit_data['Tiempo_Total_Minutos'] > min_time) &
+                            (unit_data['Tiempo_Total_Minutos'] <= max_time)
+                            ]
 
                 cat_pop = cat_zones['Poblacion'].sum()
                 total_pop = unit_data['Poblacion'].sum()
