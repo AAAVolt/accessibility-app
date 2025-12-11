@@ -56,14 +56,42 @@ class AccessibilityAnalyzer:
 
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
+
         # Calculate total travel time in minutes
         self.df['Tiempo_Total_Minutos'] = self.df['Tiempo_Trayecto']  # Using Tiempo_Trayecto as total time
 
         # Filter out zones with travel times > 999 minutes (unrealistic/invalid data)
         self.df = self.df[self.df['Tiempo_Total_Minutos'] <= 999]
+        self.df_original = df.copy()
+
+        self.df = self.df[self.df['Necesita_Viaje'] == 1]
 
         self.zone_populations = self._calculate_zone_populations()
         self.total_population = self.zone_populations.sum()
+
+    def get_trip_need_metrics(self) -> Dict:
+        """Calculate trip need statistics"""
+        if not hasattr(self, 'df_original'):
+            return {}
+
+        # Zone-level analysis
+        total_zones = self.df_original['Zona_Origen'].nunique()
+        zones_needing_trips = self.df['Zona_Origen'].nunique()
+        zones_pct = (zones_needing_trips / total_zones * 100) if total_zones > 0 else 0
+
+        # Population-level analysis
+        total_population = self.df_original.groupby('Zona_Origen')['Poblacion'].first().sum()
+        population_needing_trips = self.zone_populations.sum()
+        population_pct = (population_needing_trips / total_population * 100) if total_population > 0 else 0
+
+        return {
+            'total_zones': total_zones,
+            'zones_needing_trips': zones_needing_trips,
+            'zones_percentage': zones_pct,
+            'total_population': total_population,
+            'population_needing_trips': population_needing_trips,
+            'population_percentage': population_pct
+        }
 
     def _calculate_zone_populations(self) -> pd.Series:
         """Calculate population by zone"""
@@ -180,6 +208,25 @@ class AccessibilityAnalyzer:
         zone_comparison['Ratio'] = zone_comparison['Tiempo_Total_Minutos'] / zone_comparison['TT_Coche']
 
         return zone_comparison
+
+    def get_average_travel_times(self) -> Dict:
+        """Calculate average travel times weighted by population and unweighted"""
+        zone_best = self.get_zone_best_access()
+
+        # Average travel time per zone (unweighted)
+        avg_time_per_zone = zone_best['Tiempo_Total_Minutos'].mean()
+
+        # Average travel time weighted by population
+        total_population = zone_best['Poblacion'].sum()
+        if total_population > 0:
+            weighted_avg_time = (zone_best['Tiempo_Total_Minutos'] * zone_best['Poblacion']).sum() / total_population
+        else:
+            weighted_avg_time = 0
+
+        return {
+            'avg_per_zone': avg_time_per_zone,
+            'weighted_avg_per_pop': weighted_avg_time
+        }
 
 def get_transport_comparison(self) -> pd.DataFrame:
     """Calculate public vs private transport comparison by zone"""
@@ -322,11 +369,45 @@ class StreamlitApp:
 
     def render_key_metrics(self, analyzer: AccessibilityAnalyzer):
         """Render key metrics section"""
+        trip_metrics = analyzer.get_trip_need_metrics()
+
+        if trip_metrics:
+            st.markdown("### 🎯 Trip Need Summary")
+            col_trip1, col_trip2, col_trip3, col_trip4 = st.columns(4)
+
+            col_trip1.metric(
+                "Zones Needing Trips",
+                f"{trip_metrics['zones_needing_trips']:,} / {trip_metrics['total_zones']:,}",
+                delta=f"{trip_metrics['zones_percentage']:.1f}%"
+            )
+
+            col_trip2.metric(
+                "Population Needing Trips",
+                f"{trip_metrics['population_needing_trips']:,.0f}",
+                delta=f"{trip_metrics['population_percentage']:.1f}%"
+            )
+
+            col_trip3.metric(
+                "Zones Without Trip Need",
+                f"{trip_metrics['total_zones'] - trip_metrics['zones_needing_trips']:,}",
+                delta=f"{100 - trip_metrics['zones_percentage']:.1f}%"
+            )
+
+            col_trip4.metric(
+                "Population Without Trip Need",
+                f"{trip_metrics['total_population'] - trip_metrics['population_needing_trips']:,.0f}",
+                delta=f"{100 - trip_metrics['population_percentage']:.1f}%"
+            )
+
         st.markdown("## 🎯 Key Metrics")
 
         metrics_calc = MetricsCalculator(analyzer)
         metrics = metrics_calc.get_top_metrics()
 
+        # Get travel time metrics
+        travel_metrics = analyzer.get_average_travel_times()
+
+        # Expand to 4 columns to include the new travel time metrics
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
@@ -337,22 +418,23 @@ class StreamlitApp:
 
         with col2:
             st.metric(
-                label="Avg Travel Time",
-                value=f"{metrics['avg_travel_time']:.1f} min"
+                label="Total Zones",
+                value=f"{metrics['total_zones']:,}"
             )
 
         with col3:
-            excellent_pct = metrics['access_percentages'].get('🟢 Excellent (<30min)', 0)
             st.metric(
-                label="Excellent Access",
-                value=f"{excellent_pct:.1f}%"
+                label="Avg Time per Zone",
+                value=f"{travel_metrics['avg_per_zone']:.1f} min"
             )
 
         with col4:
             st.metric(
-                label="Total Zones",
-                value=f"{metrics['total_zones']:,}"
+                label="Avg Time (Pop Weighted)",
+                value=f"{travel_metrics['weighted_avg_per_pop']:.1f} min"
             )
+
+
 
     def render_accessibility_overview(self, analyzer: AccessibilityAnalyzer):
         """Render accessibility overview section"""
