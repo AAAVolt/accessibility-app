@@ -21,6 +21,7 @@ AVAILABLE_METRICS = [
     "JRD",  # Journey distance
     "JRT",  # Journey time
     "NTR",  # Number of transfers
+    "PJT",  # Perceived journey time
     "RID",  # Ride distance
     "RIT",  # Ride time
     "RITA",  # Ride time adapted
@@ -53,6 +54,7 @@ metric_descriptions = {
     "TWT": "Tiempo de espera para transbordo (min)",
     "WKD": "Distancia de caminata",
     "WKT": "Tiempo de caminata (min)",
+    "PJT": "Tiempo de viaje percibido (min)",
     "TT0": "Tiempo viaje coche fuera de pico (min)",
     "VP0": "Valor del tiempo fuera de pico",
     "DIS": "Distancia (km)"
@@ -78,6 +80,7 @@ spanish_column_names = {
     "TWT": "Tiempo_Espera_Transb",
     "WKD": "Dist_Caminata",
     "WKT": "Tiempo_Caminata",
+    "PJT": "Tiempo_Viaje_Percibido",
     "TT0": "TT_Coche_NoPico",
     "VP0": "Valor_NoPico",
     "DIS": "Distancia_km"
@@ -296,9 +299,14 @@ if uploaded_skim_file and custom_destination_ids:
                             # Create comparison dataframe
                             comparison_df = results_df[["Zona_Origen", "Destino_Optimo", "JRT"]].copy()
 
+                            if "PJT" in results_df.columns:
+                                comparison_df["PJT"] = results_df["PJT"]
+
                             if "TT0" in results_df.columns:
                                 comparison_df["TT0_Coche"] = results_df["TT0"]
                                 comparison_df["Diferencia_NoPico"] = comparison_df["JRT"] - comparison_df["TT0_Coche"]
+                                if "PJT" in comparison_df.columns:
+                                    comparison_df["Diferencia_PJT_Coche"] = comparison_df["PJT"] - comparison_df["TT0_Coche"]
 
                             if "DIS" in results_df.columns:
                                 comparison_df["Distancia"] = results_df["DIS"]
@@ -313,8 +321,10 @@ if uploaded_skim_file and custom_destination_ids:
                                 "Zona_Origen": "Zona Origen",
                                 "Destino_Optimo": "Destino",
                                 "JRT": "TP Tiempo (min)",
+                                "PJT": "PJT Tiempo Percibido (min)",
                                 "TT0_Coche": "Coche Fuera Pico (min)",
-                                "Diferencia_NoPico": "Diferencia NP (min)",
+                                "Diferencia_NoPico": "Diferencia JRT-Coche NP (min)",
+                                "Diferencia_PJT_Coche": "Diferencia PJT-Coche NP (min)",
                                 "Distancia": "Distancia (km)"
                             })
 
@@ -350,11 +360,19 @@ if uploaded_skim_file and custom_destination_ids:
                         with col2:
                             if "JRT" in results_df.columns:
                                 jrt_stats = results_df["JRT"].describe()
-                                st.write("**Estadísticas Tiempo de Viaje TP (Tiempo_Viaje):**")
+                                st.write("**Estadísticas Tiempo de Viaje TP (JRT):**")
                                 st.write(f"• Media: {jrt_stats['mean']:.2f} min")
                                 st.write(f"• Mediana: {jrt_stats['50%']:.2f} min")
                                 st.write(f"• Mínimo: {jrt_stats['min']:.2f} min")
                                 st.write(f"• Máximo: {jrt_stats['max']:.2f} min")
+
+                            if "PJT" in results_df.columns:
+                                pjt_stats = results_df["PJT"].describe()
+                                st.write("**Estadísticas Tiempo de Viaje Percibido (PJT):**")
+                                st.write(f"• Media: {pjt_stats['mean']:.2f} min")
+                                st.write(f"• Mediana: {pjt_stats['50%']:.2f} min")
+                                st.write(f"• Mínimo: {pjt_stats['min']:.2f} min")
+                                st.write(f"• Máximo: {pjt_stats['max']:.2f} min")
 
                         # Download buttons
                         col1, col2 = st.columns(2)
@@ -429,6 +447,7 @@ else:
         - `SFQ` - Frecuencia del servicio
         - `TWT` - Tiempo de espera para transbordo
         - `WKD, WKT` - Distancia y tiempo de caminata
+        - `PJT` - Tiempo de viaje percibido
         """)
 
     with col2:
@@ -463,6 +482,7 @@ with st.expander("📖 Descripción de las Métricas"):
     - **RITA**: Tiempo del trayecto adaptado
     - **TWT**: Tiempo de espera para transbordo
     - **WKT**: Tiempo de caminata total
+    - **PJT**: Tiempo de viaje percibido (incluye penalizaciones por espera, transbordos y caminata)
 
     **Transporte Público - Distancias:**
     - **JRD**: Distancia total del viaje
@@ -481,5 +501,5 @@ with st.expander("📖 Descripción de las Métricas"):
     - **VP0**: Valor del tiempo fuera de pico
     - **DIS**: Distancia del recorrido (km)
 
-    La aplicación optimiza por **JRT** y permite comparar los tiempos de viaje del transporte público con los tiempos en coche privado.
+    La aplicación optimiza por **JRT** y permite comparar los tiempos de viaje del transporte público (JRT y PJT) con los tiempos en coche privado.
     """)
