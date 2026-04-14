@@ -37,9 +37,9 @@ class AccessibilityConfig:
         'very_poor': '⚫ Very Poor (>90min)'
     }
 
-    SCENARIO_COLORS = ['#2563EB', '#DC2626']
+    SCENARIO_COLORS = ['#3a3a3a', '#D20B12']
     DELTA_POS = '#16A34A'
-    DELTA_NEG = '#DC2626'
+    DELTA_NEG = '#D20B12'
     DELTA_NEU = '#6B7280'
 
     THRESHOLDS = [
@@ -199,7 +199,7 @@ class AccessibilityAnalyzer:
         w_sorted    = w_norm[sorted_idx]
         cum_w       = np.cumsum(w_sorted)
         cum_wt      = np.cumsum(w_sorted * t_sorted)
-        gini        = 1 - 2 * np.trapz(cum_wt / cum_wt[-1], cum_w)
+        gini        = 1 - 2 * np.trapezoid(cum_wt / cum_wt[-1], cum_w)
 
         w_mean = np.average(t, weights=w)
         p10  = np.percentile(t, 10)
@@ -367,18 +367,37 @@ def render_population_accessibility(az, bz, label_a, label_b):
     with c2: _render_pie(b_pop, label_b)
 
 
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert #RRGGBB to rgba(r,g,b,alpha)."""
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _render_grouped_category_bar(a_series, b_series, label_a, label_b, y_title, title):
-    all_cats = list(CONFIG.CATEGORY_LABELS.values())
-    a_vals = [float(a_series.get(c, 0)) for c in all_cats]
-    b_vals = [float(b_series.get(c, 0)) for c in all_cats]
+    cat_keys  = list(CONFIG.COLORS.keys())                  # ordered: excellent … very_poor
+    all_cats  = [CONFIG.CATEGORY_LABELS[k] for k in cat_keys]
+    a_vals    = [float(a_series.get(c, 0)) for c in all_cats]
+    b_vals    = [float(b_series.get(c, 0)) for c in all_cats]
+
+    # Per-bar fill = category color @ 45 % opacity; border = scenario color
+    fill_colors = [_hex_to_rgba(CONFIG.COLORS[k], 0.45) for k in cat_keys]
+
     fig = go.Figure()
-    for vals, label, color in [(a_vals, label_a, CONFIG.SCENARIO_COLORS[0]),
-                                (b_vals, label_b, CONFIG.SCENARIO_COLORS[1])]:
+    for vals, label, border_color in [
+        (a_vals, label_a, CONFIG.SCENARIO_COLORS[0]),
+        (b_vals, label_b, CONFIG.SCENARIO_COLORS[1]),
+    ]:
         fig.add_trace(go.Bar(
-            name=label, x=all_cats, y=vals,
-            marker_color=color,
+            name=label,
+            x=all_cats,
+            y=vals,
+            marker=dict(
+                color=fill_colors,
+                line=dict(color=border_color, width=2.5),
+            ),
             text=[f"{v:,.0f}" if "Population" == y_title else f"{v:.1f}%" for v in vals],
-            textposition='outside'
+            textposition='outside',
         ))
     fig = STYLER.apply_standard_styling(fig, title, "Accessibility Category", y_title, height=500)
     fig.update_layout(barmode='group',
@@ -1460,8 +1479,8 @@ class ComparisonApp:
         st.sidebar.markdown("## 📁 Upload Scenarios")
         file_a  = st.sidebar.file_uploader("Scenario A (baseline)",    type=['xlsx','xls'], key="file_a")
         file_b  = st.sidebar.file_uploader("Scenario B (comparison)",  type=['xlsx','xls'], key="file_b")
-        label_a = st.sidebar.text_input("Label for Scenario A", value="Scenario A")
-        label_b = st.sidebar.text_input("Label for Scenario B", value="Scenario B")
+        label_a = st.sidebar.text_input("Label for Scenario A", value="Actual")
+        label_b = st.sidebar.text_input("Label for Scenario B", value="Anteproyecto")
         st.sidebar.markdown("---")
         st.sidebar.markdown("## ⚙️ Metric Settings")
 

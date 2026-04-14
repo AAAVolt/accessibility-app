@@ -186,12 +186,29 @@ if uploaded_skim_file and custom_destination_ids:
                 pass
 
             file.seek(0)
-            content = file.read().decode("utf-8")
-            lines = [line.strip() for line in content.splitlines() if re.match(r'^\d', line)]
-            data = "\n".join(lines)
+            content = file.read().decode("utf-8-sig")
+            all_lines = content.splitlines()
 
-            if lines:
-                first_line_cols = len(lines[0].split(','))
+            # --- Try to extract column names from the Visum $Relations header ---
+            # e.g. "$Relations:OrigZoneNo,DestZoneNo,ACD,ACT,IVT,JRT,..."
+            cols_from_relations = None
+            for line in all_lines:
+                stripped = line.strip()
+                if stripped.startswith("$Relations:"):
+                    cols_part = stripped[len("$Relations:"):]
+                    cols_from_relations = [c.strip() for c in cols_part.split(",")]
+                    break
+
+            # Keep only genuine data lines: must start with an integer followed by a comma
+            data_lines = [l.strip() for l in all_lines if re.match(r'^\d+,', l.strip())]
+            data = "\n".join(data_lines)
+
+            if cols_from_relations:
+                # Use the exact columns declared in the file — no positional guessing
+                cols_to_use = cols_from_relations
+            elif data_lines:
+                # Last resort: assign positionally from AVAILABLE_METRICS
+                first_line_cols = len(data_lines[0].split(','))
                 cols_to_use = ["OrigZoneNo", "DestZoneNo"] + AVAILABLE_METRICS[:first_line_cols - 2]
             else:
                 cols_to_use = DEFAULT_COLS

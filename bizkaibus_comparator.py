@@ -178,7 +178,8 @@ def load_journeys(file) -> pd.DataFrame:
 
     # Normalise LineName → A0651 format
     if "RouteNameUnique" in df.columns and df["RouteNameUnique"].notna().any():
-        df["LineName"] = df["RouteNameUnique"].astype(str).str.strip()
+        mask = df["RouteNameUnique"].notna()
+        df.loc[mask, "LineName"] = df.loc[mask, "RouteNameUnique"].astype(str).str.strip()
     elif "LineName" in df.columns:
         def _norm(v):
             s = str(v).strip()
