@@ -37,7 +37,7 @@ class AccessibilityConfig:
         'very_poor': '⚫ Very Poor (>90min)'
     }
 
-    SCENARIO_COLORS = ['#3a3a3a', '#D20B12']
+    SCENARIO_COLORS = ['#3a3a3a', '#A5CA70']
     DELTA_POS = '#16A34A'
     DELTA_NEG = '#D20B12'
     DELTA_NEU = '#6B7280'

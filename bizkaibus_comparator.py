@@ -19,7 +19,7 @@ st.set_page_config(
 
 COLORS = {
     "current":      "#3a3a3a",   # dark gray — Actual
-    "anteproyecto": "#D20B12",   # Bizkaibus red — Anteproyecto
+    "anteproyecto": "#A5CA70",   # Bizkaibus red — Anteproyecto
     "diff_pos":     "#2ca02c",
     "diff_neg":     "#e07b00",
     "neutral":      "#7f7f7f",
